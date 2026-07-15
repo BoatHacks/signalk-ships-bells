@@ -1,0 +1,27 @@
+{
+  "name": "signalk-ships-bell",
+  "version": "0.1.0",
+  "description": "SignalK Server plugin that plays traditional ship's bell audio on the half-hour watch schedule",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"no tests yet\" && exit 0"
+  },
+  "keywords": [
+    "signalk-node-server-plugin",
+    "signalk-webapp",
+    "signalk",
+    "ships-bell",
+    "watch-bell"
+  ],
+  "author": "Tobias Rosenstock",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/BoatHacks/signalk-ships-bell.git"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {},
+  "devDependencies": {}
+}
