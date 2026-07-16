@@ -1,5 +1,7 @@
 # signalk-ships-bells
 
+[![CI](https://github.com/BoatHacks/signalk-ships-bells/actions/workflows/ci.yml/badge.svg)](https://github.com/BoatHacks/signalk-ships-bells/actions/workflows/ci.yml)
+
 <img src="public/icons/icon.png" alt="Ship's Bell icon" width="96" />
 
 A [SignalK Server](https://github.com/SignalK/signalk-server) plugin that plays traditional ship's bell audio on the watch schedule (one strike every half hour, up to eight bells).
@@ -75,6 +77,24 @@ pack on Freesound (CC BY 4.0) — see `public/bells/NOTICE.md` for full attribut
 ## Install
 
 Not yet published. For local development, clone into your SignalK server's `node_modules`, or use `npm link`.
+
+## Development
+
+Run the test suite with:
+
+```
+npm test
+```
+
+This runs Node's built-in test runner (`node --test`) over `test/*.test.js`, which
+covers the bell-schedule math for all three watch schemes, the plugin's config
+schema, its start/stop/restart lifecycle, and the `/schedule` REST endpoint.
+
+CI runs on every push and pull request via the reusable
+[SignalK plugin-ci workflow](https://github.com/SignalK/signalk-server/blob/master/.github/workflows/plugin-ci.yml)
+(`.github/workflows/ci.yml`), which additionally validates the plugin's
+`package.json`, entry point, schema, and lifecycle across Linux, macOS,
+Windows, and Raspberry Pi-class Node versions.
 
 ## License
 

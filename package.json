@@ -4,7 +4,7 @@
   "description": "SignalK Server plugin that plays traditional ship's bell audio on the half-hour watch schedule",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"no tests yet\" && exit 0"
+    "test": "node --test test/*.test.js"
   },
   "keywords": [
     "signalk-node-server-plugin",

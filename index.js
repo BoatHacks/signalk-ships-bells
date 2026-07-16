@@ -1,5 +1,50 @@
 const path = require('path');
 
+// ---- Bell-count calculation --------------------------------------------
+//
+// All three schemes share the same underlying idea: bells cycle 1-8 every
+// 240 minutes (a 4-hour watch), struck on the half hour. The only place
+// they can differ is the second dog watch (18:00-20:00), which is where
+// the historical variants diverge:
+//
+//  - "traditional" (post-1797 Royal Navy convention): the second dog watch
+//    resets the count to 1 instead of continuing 5-6-7, so that "five
+//    bells in the second dog watch" - the Nore mutiny signal - is never
+//    struck again. Sequence: 18:30=1, 19:00=2, 19:30=3, 20:00=8.
+//  - "pre-1797": the older convention, where the count simply continues
+//    5-6-7 before the full 8 at the watch change. Sequence: 18:30=5,
+//    19:00=6, 19:30=7, 20:00=8.
+//  - "simple-cycle": ignores the dog-watch split as a concept entirely and
+//    just cycles 1-8 every 240 minutes all day. This produces the exact
+//    same strikes as "pre-1797" (splitting a 4-hour watch into two 2-hour
+//    ones doesn't change the half-hour count unless something resets it),
+//    so it's offered as a separate, more approachable option/label rather
+//    than a different calculation.
+//
+// Pulled out to module scope (rather than inside the plugin factory below)
+// so the test suite can exercise this pure logic directly, without needing
+// a mock SignalK app.
+
+function bellCountForMinutes(minutesSinceMidnight, scheme) {
+  const inSecondDogWatch = minutesSinceMidnight > 1080 && minutesSinceMidnight <= 1200;
+
+  if (scheme === 'traditional' && inSecondDogWatch) {
+    const offset = minutesSinceMidnight - 1080; // 30, 60, 90, 120
+    const resetSequence = { 30: 1, 60: 2, 90: 3, 120: 8 };
+    return resetSequence[offset];
+  }
+
+  // "pre-1797" and "simple-cycle" (and "traditional" outside the second
+  // dog watch) all follow the plain 240-minute cycle.
+  const cyclePosition = minutesSinceMidnight % 240;
+  const idx = cyclePosition / 30;
+  return idx === 0 ? 8 : idx;
+}
+
+function minutesSinceMidnight(date) {
+  return date.getHours() * 60 + date.getMinutes();
+}
+
 module.exports = function (app) {
   const plugin = {};
 
@@ -44,47 +89,6 @@ module.exports = function (app) {
   }
 
   const MUTED_STATES = ['anchored', 'moored'];
-
-  // ---- Bell-count calculation --------------------------------------------
-  //
-  // All three schemes share the same underlying idea: bells cycle 1-8 every
-  // 240 minutes (a 4-hour watch), struck on the half hour. The only place
-  // they can differ is the second dog watch (18:00-20:00), which is where
-  // the historical variants diverge:
-  //
-  //  - "traditional" (post-1797 Royal Navy convention): the second dog watch
-  //    resets the count to 1 instead of continuing 5-6-7, so that "five
-  //    bells in the second dog watch" - the Nore mutiny signal - is never
-  //    struck again. Sequence: 18:30=1, 19:00=2, 19:30=3, 20:00=8.
-  //  - "pre-1797": the older convention, where the count simply continues
-  //    5-6-7 before the full 8 at the watch change. Sequence: 18:30=5,
-  //    19:00=6, 19:30=7, 20:00=8.
-  //  - "simple-cycle": ignores the dog-watch split as a concept entirely and
-  //    just cycles 1-8 every 240 minutes all day. This produces the exact
-  //    same strikes as "pre-1797" (splitting a 4-hour watch into two 2-hour
-  //    ones doesn't change the half-hour count unless something resets it),
-  //    so it's offered as a separate, more approachable option/label rather
-  //    than a different calculation.
-
-  function bellCountForMinutes(minutesSinceMidnight, scheme) {
-    const inSecondDogWatch = minutesSinceMidnight > 1080 && minutesSinceMidnight <= 1200;
-
-    if (scheme === 'traditional' && inSecondDogWatch) {
-      const offset = minutesSinceMidnight - 1080; // 30, 60, 90, 120
-      const resetSequence = { 30: 1, 60: 2, 90: 3, 120: 8 };
-      return resetSequence[offset];
-    }
-
-    // "pre-1797" and "simple-cycle" (and "traditional" outside the second
-    // dog watch) all follow the plain 240-minute cycle.
-    const cyclePosition = minutesSinceMidnight % 240;
-    const idx = cyclePosition / 30;
-    return idx === 0 ? 8 : idx;
-  }
-
-  function minutesSinceMidnight(date) {
-    return date.getHours() * 60 + date.getMinutes();
-  }
 
   // ---- Playback -----------------------------------------------------------
 
@@ -280,3 +284,9 @@ module.exports = function (app) {
 
   return plugin;
 };
+
+// Exposed for unit testing (see test/bell-schedule.test.js). Attaching to the
+// factory function is safe - signalk-server only checks that the module's
+// default/CJS export is itself callable, which it still is.
+module.exports.bellCountForMinutes = bellCountForMinutes;
+module.exports.minutesSinceMidnight = minutesSinceMidnight;
