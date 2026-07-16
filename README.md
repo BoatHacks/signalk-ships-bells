@@ -1,5 +1,7 @@
 # signalk-ships-bells
 
+<img src="public/icons/icon.png" alt="Ship's Bell icon" width="96" />
+
 A [SignalK Server](https://github.com/SignalK/signalk-server) plugin that plays traditional ship's bell audio on the watch schedule (one strike every half hour, up to eight bells).
 
 ## Status

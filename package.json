@@ -15,6 +15,10 @@
   ],
   "author": "Tobias Rosenstock",
   "license": "MIT",
+  "signalk": {
+    "appIcon": "./icons/icon.png",
+    "displayName": "Ship's Bell"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/BoatHacks/signalk-ships-bells.git"

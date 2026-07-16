@@ -4,55 +4,89 @@
   <meta charset="utf-8" />
   <title>Ship's Bell</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="icon" type="image/png" href="icons/icon.png" />
   <style>
+    :root {
+      --navy: #041f50;
+      --navy-light: #0b2e6b;
+      --gold: #ecaa25;
+      --gold-dim: #b98419;
+    }
     body {
       font-family: system-ui, sans-serif;
       max-width: 480px;
       margin: 2rem auto;
-      padding: 0 1rem;
-      color: #222;
+      padding: 0 1rem 2rem;
+      color: #f2e9d8;
+      background: var(--navy);
+      min-height: 100vh;
     }
     h1 {
       font-size: 1.25rem;
+      color: var(--gold);
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+    }
+    h1 img {
+      width: 32px;
+      height: 32px;
     }
     #status {
       font-size: 0.9rem;
-      color: #666;
+      color: #b9c3d9;
       margin-bottom: 1rem;
     }
     #last-strike {
       font-size: 1.1rem;
       margin-bottom: 1rem;
+      color: var(--gold);
     }
     button {
       font-size: 1rem;
       padding: 0.5rem 1rem;
+      background: var(--gold);
+      color: var(--navy);
+      border: none;
+      border-radius: 6px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    button:hover {
+      background: var(--gold-dim);
     }
     #controls {
       display: flex;
       align-items: center;
       gap: 0.75rem;
       margin: 1rem 0;
+      background: var(--navy-light);
+      padding: 0.75rem 1rem;
+      border-radius: 8px;
     }
     #controls label {
       font-size: 0.9rem;
-      color: #444;
+      color: #b9c3d9;
     }
     #volume {
       flex: 1;
+      accent-color: var(--gold);
     }
     #mute-button {
       font-size: 0.9rem;
       padding: 0.35rem 0.7rem;
+      background: transparent;
+      color: var(--gold);
+      border: 1px solid var(--gold);
     }
     #mute-button[aria-pressed="true"] {
-      background: #333;
-      color: #fff;
+      background: var(--gold);
+      color: var(--navy);
     }
   </style>
 </head>
 <body>
-  <h1>Ship's Bell</h1>
+  <h1><img src="icons/icon.png" alt="" /> Ship's Bell</h1>
   <div id="status">Connecting...</div>
   <div id="last-strike">No strikes yet this session.</div>
   <div id="controls">
