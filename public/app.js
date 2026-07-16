@@ -3,6 +3,57 @@
   var lastStrikeEl = document.getElementById('last-strike');
   var audioEl = document.getElementById('bell-audio');
   var testButton = document.getElementById('test-button');
+  var volumeEl = document.getElementById('volume');
+  var muteButton = document.getElementById('mute-button');
+
+  var STORAGE_KEY = 'signalk-ships-bell:audio-prefs';
+
+  function loadPrefs() {
+    try {
+      var stored = JSON.parse(localStorage.getItem(STORAGE_KEY));
+      return {
+        volume: typeof stored?.volume === 'number' ? stored.volume : 80,
+        muted: !!stored?.muted
+      };
+    } catch (e) {
+      return { volume: 80, muted: false };
+    }
+  }
+
+  function savePrefs(prefs) {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(prefs));
+    } catch (e) {
+      // localStorage unavailable (private browsing etc) - just skip persisting
+    }
+  }
+
+  var prefs = loadPrefs();
+
+  function applyPrefs() {
+    audioEl.volume = prefs.volume / 100;
+    audioEl.muted = prefs.muted;
+    volumeEl.value = prefs.volume;
+    muteButton.setAttribute('aria-pressed', String(prefs.muted));
+    muteButton.textContent = prefs.muted ? 'Unmute' : 'Mute';
+  }
+
+  applyPrefs();
+
+  volumeEl.addEventListener('input', function () {
+    prefs.volume = Number(volumeEl.value);
+    if (prefs.volume > 0 && prefs.muted) {
+      prefs.muted = false;
+    }
+    applyPrefs();
+    savePrefs(prefs);
+  });
+
+  muteButton.addEventListener('click', function () {
+    prefs.muted = !prefs.muted;
+    applyPrefs();
+    savePrefs(prefs);
+  });
 
   var NOTIFICATION_PATH = 'notifications.plugins.signalkShipsBell.strike';
   var BELLS_BASE_URL = 'bells/';

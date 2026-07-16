@@ -28,12 +28,38 @@
       font-size: 1rem;
       padding: 0.5rem 1rem;
     }
+    #controls {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      margin: 1rem 0;
+    }
+    #controls label {
+      font-size: 0.9rem;
+      color: #444;
+    }
+    #volume {
+      flex: 1;
+    }
+    #mute-button {
+      font-size: 0.9rem;
+      padding: 0.35rem 0.7rem;
+    }
+    #mute-button[aria-pressed="true"] {
+      background: #333;
+      color: #fff;
+    }
   </style>
 </head>
 <body>
   <h1>Ship's Bell</h1>
   <div id="status">Connecting...</div>
   <div id="last-strike">No strikes yet this session.</div>
+  <div id="controls">
+    <label for="volume">Volume</label>
+    <input type="range" id="volume" min="0" max="100" value="80" />
+    <button id="mute-button" aria-pressed="false">Mute</button>
+  </div>
   <button id="test-button">Play test bell (8 bells)</button>
   <audio id="bell-audio"></audio>
   <script src="app.js"></script>
