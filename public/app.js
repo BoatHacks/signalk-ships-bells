@@ -119,10 +119,17 @@
 
   function playStrike(strikes, label) {
     audioEl.src = bellFileUrl(strikes);
-    audioEl.play().catch(function (err) {
-      statusEl.textContent = 'Playback blocked - tap the page once, then it will play automatically.';
-      console.warn('ships-bell: audio playback failed', err);
-    });
+    var playPromise = audioEl.play();
+    if (playPromise && typeof playPromise.then === 'function') {
+      playPromise
+        .then(function () {
+          statusEl.textContent = 'Connected, waiting for the next bell...';
+        })
+        .catch(function (err) {
+          statusEl.textContent = 'Playback blocked - tap the page once, then it will play automatically.';
+          console.warn('ships-bells: audio playback failed', err);
+        });
+    }
     lastStrikeEl.textContent = (label || (strikes + ' bell(s)')) + ' - ' + new Date().toLocaleTimeString();
   }
 
