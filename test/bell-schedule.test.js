@@ -1,6 +1,6 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { bellCountForMinutes, minutesSinceMidnight } = require('../index.js');
+const { bellCountForMinutes, minutesSinceMidnight, parseTimeToMinutes, isWithinQuietHours } = require('../index.js');
 
 test('simple-cycle and pre-1797 cycle 1-8 every 4 hours all day', () => {
   for (let m = 30; m <= 1440; m += 30) {
@@ -61,4 +61,38 @@ test('minutesSinceMidnight extracts hours/minutes and ignores seconds', () => {
   assert.strictEqual(minutesSinceMidnight(new Date(2026, 0, 1, 18, 30, 45)), 1110);
   assert.strictEqual(minutesSinceMidnight(new Date(2026, 0, 1, 0, 0, 0)), 0);
   assert.strictEqual(minutesSinceMidnight(new Date(2026, 0, 1, 23, 59, 59)), 1439);
+});
+
+test('parseTimeToMinutes parses valid HH:MM and rejects everything else', () => {
+  assert.strictEqual(parseTimeToMinutes('00:00'), 0);
+  assert.strictEqual(parseTimeToMinutes('06:00'), 360);
+  assert.strictEqual(parseTimeToMinutes('22:00'), 1320);
+  assert.strictEqual(parseTimeToMinutes('23:59'), 1439);
+  assert.ok(Number.isNaN(parseTimeToMinutes('24:00')));
+  assert.ok(Number.isNaN(parseTimeToMinutes('12:60')));
+  assert.ok(Number.isNaN(parseTimeToMinutes('not a time')));
+  assert.ok(Number.isNaN(parseTimeToMinutes(undefined)));
+  assert.ok(Number.isNaN(parseTimeToMinutes('')));
+});
+
+test('isWithinQuietHours handles a same-day range (e.g. 13:00-15:00)', () => {
+  assert.strictEqual(isWithinQuietHours(12 * 60, '13:00', '15:00'), false); // 12:00
+  assert.strictEqual(isWithinQuietHours(13 * 60, '13:00', '15:00'), true); // 13:00, inclusive start
+  assert.strictEqual(isWithinQuietHours(14 * 60, '13:00', '15:00'), true); // 14:00
+  assert.strictEqual(isWithinQuietHours(15 * 60, '13:00', '15:00'), false); // 15:00, exclusive end
+});
+
+test('isWithinQuietHours handles an overnight range spanning midnight (e.g. 22:00-06:00)', () => {
+  assert.strictEqual(isWithinQuietHours(21 * 60 + 59, '22:00', '06:00'), false); // 21:59
+  assert.strictEqual(isWithinQuietHours(22 * 60, '22:00', '06:00'), true); // 22:00
+  assert.strictEqual(isWithinQuietHours(0, '22:00', '06:00'), true); // 00:00
+  assert.strictEqual(isWithinQuietHours(5 * 60 + 59, '22:00', '06:00'), true); // 05:59
+  assert.strictEqual(isWithinQuietHours(6 * 60, '22:00', '06:00'), false); // 06:00, exclusive end
+  assert.strictEqual(isWithinQuietHours(12 * 60, '22:00', '06:00'), false); // 12:00, midday
+});
+
+test('isWithinQuietHours treats an equal or invalid start/end as "no range" rather than "muted all day"', () => {
+  assert.strictEqual(isWithinQuietHours(12 * 60, '22:00', '22:00'), false);
+  assert.strictEqual(isWithinQuietHours(12 * 60, undefined, undefined), false);
+  assert.strictEqual(isWithinQuietHours(12 * 60, 'garbage', '06:00'), false);
 });

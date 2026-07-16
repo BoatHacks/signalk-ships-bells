@@ -45,6 +45,42 @@ function minutesSinceMidnight(date) {
   return date.getHours() * 60 + date.getMinutes();
 }
 
+// ---- Quiet-hours calculation --------------------------------------------
+//
+// Also pulled out to module scope so the test suite can exercise it directly.
+
+function parseTimeToMinutes(hhmm) {
+  if (typeof hhmm !== 'string') {
+    return NaN;
+  }
+  const match = hhmm.match(/^(\d{1,2}):(\d{2})$/);
+  if (!match) {
+    return NaN;
+  }
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  if (hours > 23 || minutes > 59) {
+    return NaN;
+  }
+  return hours * 60 + minutes;
+}
+
+function isWithinQuietHours(currentMinutes, startStr, endStr) {
+  const start = parseTimeToMinutes(startStr);
+  const end = parseTimeToMinutes(endStr);
+  if (Number.isNaN(start) || Number.isNaN(end) || start === end) {
+    // Equal start/end (including both unset) is treated as "no range" rather
+    // than "muted all day" - a likely misconfiguration shouldn't silence the
+    // bell entirely.
+    return false;
+  }
+  if (start < end) {
+    return currentMinutes >= start && currentMinutes < end;
+  }
+  // Range wraps past midnight, e.g. 22:00-06:00
+  return currentMinutes >= start || currentMinutes < end;
+}
+
 module.exports = function (app) {
   const plugin = {};
 
@@ -117,11 +153,25 @@ module.exports = function (app) {
     audioPlayerLoadFailed = false;
   };
 
-  function strikeBell(strikes, options) {
-    const muted = options.muteWhenAnchoredOrMoored && MUTED_STATES.includes(currentNavState);
+  function isMuted(options) {
+    if (options.muteWhenAnchoredOrMoored && MUTED_STATES.includes(currentNavState)) {
+      return true;
+    }
+    if (options.quietHoursEnabled) {
+      const now = minutesSinceMidnight(new Date());
+      if (isWithinQuietHours(now, options.quietHoursStart, options.quietHoursEnd)) {
+        return true;
+      }
+    }
+    return false;
+  }
 
-    if (muted) {
-      app.debug(`ships-bells: ${strikes} bell(s) due, but muted (navigation.state=${currentNavState})`);
+  function strikeBell(strikes, options) {
+    if (isMuted(options)) {
+      app.debug(
+        `ships-bells: ${strikes} bell(s) due, but muted ` +
+        `(navigation.state=${currentNavState}, quietHours=${options.quietHoursEnabled})`
+      );
       return;
     }
 
@@ -220,6 +270,23 @@ module.exports = function (app) {
         title: 'Mute bell when at anchor or moored',
         description: 'Requires navigation.state to be populated, e.g. by the signalk-autostate plugin.',
         default: true
+      },
+      quietHoursEnabled: {
+        type: 'boolean',
+        title: 'Mute during a time range',
+        description: 'E.g. quiet hours overnight while at anchor or in a marina.',
+        default: false
+      },
+      quietHoursStart: {
+        type: 'string',
+        title: 'Quiet hours start (HH:MM, 24-hour, ship-local time)',
+        default: '22:00'
+      },
+      quietHoursEnd: {
+        type: 'string',
+        title: 'Quiet hours end (HH:MM, 24-hour, ship-local time)',
+        description: 'Can be earlier than the start time to span midnight, e.g. 22:00-06:00.',
+        default: '06:00'
       }
     }
   };
@@ -326,3 +393,5 @@ module.exports = function (app) {
 // default/CJS export is itself callable, which it still is.
 module.exports.bellCountForMinutes = bellCountForMinutes;
 module.exports.minutesSinceMidnight = minutesSinceMidnight;
+module.exports.parseTimeToMinutes = parseTimeToMinutes;
+module.exports.isWithinQuietHours = isWithinQuietHours;

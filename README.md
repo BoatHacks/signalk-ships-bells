@@ -35,6 +35,10 @@ listens for it over the SignalK websocket and plays the matching audio file.
   - **Mute bell when at anchor or moored** — skips playback while
     `navigation.state` is `anchored` or `moored`. Requires that path to be
     populated by something on your system — see below.
+  - **Mute during a time range** — an optional overnight/quiet-hours mute,
+    with a start and end time (`HH:MM`, 24-hour, ship-local time). The end
+    time can be earlier than the start to span midnight, e.g. `22:00`–`06:00`.
+    Independent of, and combinable with, the anchor/moored mute above.
   - **Playback method** — `webapp`, `server speaker`, or `both`:
     - *Webapp* — each strike is sent as a `notifications.plugins.signalkShipsBell.strike`
       delta. The bundled webapp (open it from the SignalK admin UI's webapps
