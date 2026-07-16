@@ -76,7 +76,14 @@ pack on Freesound (CC BY 4.0) — see `public/bells/NOTICE.md` for full attribut
 
 ## Install
 
-Not yet published. For local development, clone into your SignalK server's `node_modules`, or use `npm link`.
+Available on npm as [`signalk-ships-bells`](https://www.npmjs.com/package/signalk-ships-bells) —
+install it from the SignalK Server admin UI's App Store, or via:
+
+```
+npm install signalk-ships-bells
+```
+
+For local development, clone into your SignalK server's `node_modules`, or use `npm link`.
 
 ## Development
 
