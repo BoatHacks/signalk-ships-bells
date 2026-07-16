@@ -1,5 +1,5 @@
 {
-  "name": "signalk-ships-bell",
+  "name": "signalk-ships-bells",
   "version": "0.1.0",
   "description": "SignalK Server plugin that plays traditional ship's bell audio on the half-hour watch schedule",
   "main": "index.js",
@@ -17,7 +17,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/BoatHacks/signalk-ships-bell.git"
+    "url": "git+https://github.com/BoatHacks/signalk-ships-bells.git"
   },
   "engines": {
     "node": ">=18.0.0"

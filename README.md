@@ -1,4 +1,4 @@
-# signalk-ships-bell
+# signalk-ships-bells
 
 A [SignalK Server](https://github.com/SignalK/signalk-server) plugin that plays traditional ship's bell audio on the watch schedule (one strike every half hour, up to eight bells).
 
@@ -33,7 +33,7 @@ listens for it over the SignalK websocket and plays the matching audio file.
     populated by something on your system — see below.
 - Audio playback: each strike is sent as a `notifications.plugins.signalkShipsBell.strike`
   delta. The bundled webapp (open it from the SignalK admin UI's webapps list,
-  or at `/signalk-ships-bell/`) subscribes to that delta over the websocket and
+  or at `/signalk-ships-bells/`) subscribes to that delta over the websocket and
   plays the matching file via `<audio>` — so it sounds wherever that page is
   open (e.g. a browser tab on an MFD or tablet at the helm). A "play test
   bell" button is included for checking that audio works without waiting for
@@ -51,7 +51,7 @@ listens for it over the SignalK websocket and plays the matching audio file.
 
 `public/bells/` bundles one WAV file per strike count, `bell-strikes-1.wav` through
 `bell-strikes-8.wav`, served statically by SignalK server's signalk-webapp hosting
-at `/signalk-ships-bell/bells/`. These are sourced from Benboncan's "Bells / Gongs"
+at `/signalk-ships-bells/bells/`. These are sourced from Benboncan's "Bells / Gongs"
 pack on Freesound (CC BY 4.0) — see `public/bells/NOTICE.md` for full attribution.
 
 ## Install

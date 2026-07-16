@@ -1,13 +1,13 @@
 module.exports = function (app) {
   const plugin = {};
 
-  plugin.id = 'signalk-ships-bell';
+  plugin.id = 'signalk-ships-bells';
   plugin.name = "Ship's Bell";
   plugin.description = "Plays traditional ship's bell audio on the watch schedule";
 
   // One audio file per strike count (1-8), e.g. bell-strikes-3.wav for three bells.
   // Served statically from public/bells/ by SignalK server's signalk-webapp hosting,
-  // at /signalk-ships-bell/bells/<file>.
+  // at /signalk-ships-bells/bells/<file>.
   const bellFile = (strikes) => `bell-strikes-${strikes}.wav`;
 
   let halfHourTimer;
@@ -69,7 +69,7 @@ module.exports = function (app) {
     }
 
     app.debug(`ships-bell: striking ${strikes} bell(s), file ${bellFile(strikes)}`);
-    // The public/ webapp (served at /signalk-ships-bell/) subscribes to this
+    // The public/ webapp (served at /signalk-ships-bells/) subscribes to this
     // notification over the SignalK websocket and plays the referenced file
     // via <audio>, so it sounds wherever that webapp is open (helm tablet,
     // MFD browser, etc). Anything else on the SignalK bus can react to it too.

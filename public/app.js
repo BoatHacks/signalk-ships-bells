@@ -6,7 +6,7 @@
   var volumeEl = document.getElementById('volume');
   var muteButton = document.getElementById('mute-button');
 
-  var STORAGE_KEY = 'signalk-ships-bell:audio-prefs';
+  var STORAGE_KEY = 'signalk-ships-bells:audio-prefs';
 
   function loadPrefs() {
     try {
