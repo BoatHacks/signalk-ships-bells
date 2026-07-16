@@ -1,3 +1,5 @@
+const path = require('path');
+
 module.exports = function (app) {
   const plugin = {};
 
@@ -7,13 +9,38 @@ module.exports = function (app) {
 
   // One audio file per strike count (1-8), e.g. bell-strikes-3.wav for three bells.
   // Served statically from public/bells/ by SignalK server's signalk-webapp hosting,
-  // at /signalk-ships-bells/bells/<file>.
+  // at /signalk-ships-bells/bells/<file>, and also playable directly from disk for
+  // server-side speaker output.
   const bellFile = (strikes) => `bell-strikes-${strikes}.wav`;
+  const bellFilePath = (strikes) => path.join(__dirname, 'public', 'bells', bellFile(strikes));
 
   let halfHourTimer;
   let alignmentTimer;
   let unsubscribeNavState;
   let currentNavState;
+  let audioPlayer;
+  let audioPlayerLoadFailed = false;
+
+  // Lazily require play-sound so the plugin still loads (and its config UI still
+  // works) on systems where that optional dependency isn't installed, unless
+  // server-speaker playback is actually selected.
+  function getAudioPlayer() {
+    if (audioPlayer || audioPlayerLoadFailed) {
+      return audioPlayer;
+    }
+    try {
+      const playSound = require('play-sound');
+      audioPlayer = playSound({});
+    } catch (err) {
+      audioPlayerLoadFailed = true;
+      app.error(
+        `ships-bells: could not load play-sound (${err.message}). ` +
+        "Server-speaker playback needs the 'play-sound' npm dependency plus a " +
+        "system audio player (e.g. mpg123 or aplay) installed on this machine."
+      );
+    }
+    return audioPlayer;
+  }
 
   const MUTED_STATES = ['anchored', 'moored'];
 
@@ -64,31 +91,49 @@ module.exports = function (app) {
     const muted = options.muteWhenAnchoredOrMoored && MUTED_STATES.includes(currentNavState);
 
     if (muted) {
-      app.debug(`ships-bell: ${strikes} bell(s) due, but muted (navigation.state=${currentNavState})`);
+      app.debug(`ships-bells: ${strikes} bell(s) due, but muted (navigation.state=${currentNavState})`);
       return;
     }
 
-    app.debug(`ships-bell: striking ${strikes} bell(s), file ${bellFile(strikes)}`);
-    // The public/ webapp (served at /signalk-ships-bells/) subscribes to this
-    // notification over the SignalK websocket and plays the referenced file
-    // via <audio>, so it sounds wherever that webapp is open (helm tablet,
-    // MFD browser, etc). Anything else on the SignalK bus can react to it too.
-    app.handleMessage(plugin.id, {
-      updates: [
-        {
-          values: [
-            {
-              path: 'notifications.plugins.signalkShipsBell.strike',
-              value: {
-                state: 'normal',
-                message: `${strikes} bell(s)`,
-                data: { strikes, file: bellFile(strikes) }
+    const method = options.playbackMethod || 'webapp';
+    app.debug(`ships-bells: striking ${strikes} bell(s), file ${bellFile(strikes)}, method=${method}`);
+
+    if (method === 'webapp' || method === 'both') {
+      // The public/ webapp (served at /signalk-ships-bells/) subscribes to this
+      // notification over the SignalK websocket and plays the referenced file
+      // via <audio>, so it sounds wherever that webapp is open (helm tablet,
+      // MFD browser, etc). Anything else on the SignalK bus can react to it too.
+      app.handleMessage(plugin.id, {
+        updates: [
+          {
+            values: [
+              {
+                path: 'notifications.plugins.signalkShipsBell.strike',
+                value: {
+                  state: 'normal',
+                  message: `${strikes} bell(s)`,
+                  data: { strikes, file: bellFile(strikes) }
+                }
               }
-            }
-          ]
-        }
-      ]
-    });
+            ]
+          }
+        ]
+      });
+    }
+
+    if (method === 'server-speaker' || method === 'both') {
+      // Plays directly on the machine running SignalK, via a speaker wired to it -
+      // no browser/webapp needed. Same idea as signalk-audio-notifications, using
+      // play-sound to shell out to a system player (mpg123, aplay, etc).
+      const player = getAudioPlayer();
+      if (player) {
+        player.play(bellFilePath(strikes), (err) => {
+          if (err) {
+            app.error(`ships-bells: server-speaker playback failed: ${err.message || err}`);
+          }
+        });
+      }
+    }
   }
 
   function scheduleNextStrike(options) {
@@ -132,6 +177,23 @@ module.exports = function (app) {
           'Pre-1797 (continues 5-6-7 bells through the second dog watch)'
         ],
         default: 'traditional'
+      },
+      playbackMethod: {
+        type: 'string',
+        title: 'Playback method',
+        description:
+          "'Webapp' plays through the browser wherever this plugin's webapp is open " +
+          "(e.g. a helm tablet). 'Server speaker' plays directly on the machine " +
+          "running Signal K, via a speaker wired to it - no browser needed, but " +
+          "requires the 'play-sound' npm package plus a system audio player " +
+          "(e.g. mpg123 or aplay) installed on that machine.",
+        enum: ['webapp', 'server-speaker', 'both'],
+        enumNames: [
+          'Webapp (play in browser)',
+          'Server speaker (play on the Signal K host)',
+          'Both'
+        ],
+        default: 'webapp'
       },
       muteWhenAnchoredOrMoored: {
         type: 'boolean',

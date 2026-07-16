@@ -31,13 +31,24 @@ listens for it over the SignalK websocket and plays the matching audio file.
   - **Mute bell when at anchor or moored** — skips playback while
     `navigation.state` is `anchored` or `moored`. Requires that path to be
     populated by something on your system — see below.
-- Audio playback: each strike is sent as a `notifications.plugins.signalkShipsBell.strike`
-  delta. The bundled webapp (open it from the SignalK admin UI's webapps list,
-  or at `/signalk-ships-bells/`) subscribes to that delta over the websocket and
-  plays the matching file via `<audio>` — so it sounds wherever that page is
-  open (e.g. a browser tab on an MFD or tablet at the helm). A "play test
-  bell" button is included for checking that audio works without waiting for
-  the next half hour.
+  - **Playback method** — `webapp`, `server speaker`, or `both`:
+    - *Webapp* — each strike is sent as a `notifications.plugins.signalkShipsBell.strike`
+      delta. The bundled webapp (open it from the SignalK admin UI's webapps
+      list, or at `/signalk-ships-bells/`) subscribes to that delta over the
+      websocket and plays the matching file via `<audio>` — so it sounds
+      wherever that page is open (e.g. a browser tab on an MFD or tablet at
+      the helm). A "play test bell" button is included for checking that
+      audio works without waiting for the next half hour.
+    - *Server speaker* — plays directly on the machine running Signal K, via a
+      speaker wired to it, using [play-sound](https://www.npmjs.com/package/play-sound)
+      to shell out to a system audio player. No browser needed. This is the
+      same underlying approach as
+      [signalk-audio-notifications](https://github.com/meri-imperiumi/signalk-audio-notifications),
+      which plays spoken alerts the same way. Requires a system player such as
+      `mpg123` or `aplay` to be installed on that machine — `play-sound` picks
+      whichever it finds. If none is found, an error is logged and playback is
+      silently skipped rather than crashing the plugin.
+    - *Both* — does both of the above.
 
 ## Recommended companion plugins
 
