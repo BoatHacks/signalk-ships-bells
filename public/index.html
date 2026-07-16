@@ -83,6 +83,34 @@
       background: var(--gold);
       color: var(--navy);
     }
+    #schedule-control {
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+      margin: 1rem 0;
+      background: var(--navy-light);
+      padding: 0.75rem 1rem;
+      border-radius: 8px;
+      flex-wrap: wrap;
+    }
+    #schedule-control label {
+      font-size: 0.9rem;
+      color: #b9c3d9;
+    }
+    #schedule-select {
+      flex: 1;
+      min-width: 140px;
+      background: var(--navy);
+      color: #f2e9d8;
+      border: 1px solid var(--gold-dim);
+      border-radius: 6px;
+      padding: 0.4rem 0.5rem;
+      font-size: 0.9rem;
+    }
+    #schedule-status {
+      font-size: 0.8rem;
+      color: #b9c3d9;
+    }
   </style>
 </head>
 <body>
@@ -93,6 +121,13 @@
     <label for="volume">Volume</label>
     <input type="range" id="volume" min="0" max="100" value="80" />
     <button id="mute-button" aria-pressed="false">Mute</button>
+  </div>
+  <div id="schedule-control">
+    <label for="schedule-select">Watch bell schedule</label>
+    <select id="schedule-select" disabled>
+      <option>Loading...</option>
+    </select>
+    <span id="schedule-status"></span>
   </div>
   <button id="test-button">Play test bell (8 bells)</button>
   <audio id="bell-audio"></audio>

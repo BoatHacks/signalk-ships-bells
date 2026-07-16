@@ -51,6 +51,11 @@ listens for it over the SignalK websocket and plays the matching audio file.
       whichever it finds. If none is found, an error is logged and playback is
       silently skipped rather than crashing the plugin.
     - *Both* — does both of the above.
+- **Schedule selection from the webapp** — the same watch-bell schedule choice
+  is also available directly in `public/`, via a dropdown that reads and
+  writes the setting through a small REST API exposed by the plugin
+  (`GET`/`PUT /plugins/signalk-ships-bells/schedule`), so it can be changed
+  without going into Server → Plugin Config.
 
 ## Recommended companion plugins
 

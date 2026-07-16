@@ -55,6 +55,61 @@
     savePrefs(prefs);
   });
 
+  var scheduleSelect = document.getElementById('schedule-select');
+  var scheduleStatus = document.getElementById('schedule-status');
+  var API_BASE = '/plugins/signalk-ships-bells';
+
+  function loadSchedule() {
+    fetch(API_BASE + '/schedule')
+      .then(function (res) {
+        if (!res.ok) {
+          throw new Error('status ' + res.status);
+        }
+        return res.json();
+      })
+      .then(function (data) {
+        scheduleSelect.innerHTML = '';
+        (data.options || []).forEach(function (opt) {
+          var el = document.createElement('option');
+          el.value = opt.value;
+          el.textContent = opt.label;
+          scheduleSelect.appendChild(el);
+        });
+        scheduleSelect.value = data.watchScheme;
+        scheduleSelect.disabled = false;
+      })
+      .catch(function (err) {
+        scheduleStatus.textContent = 'Could not load schedule options.';
+        console.warn('ships-bells: failed to load schedule', err);
+      });
+  }
+
+  scheduleSelect.addEventListener('change', function () {
+    var watchScheme = scheduleSelect.value;
+    scheduleStatus.textContent = 'Saving...';
+    fetch(API_BASE + '/schedule', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ watchScheme: watchScheme })
+    })
+      .then(function (res) {
+        if (!res.ok) {
+          throw new Error('status ' + res.status);
+        }
+        return res.json();
+      })
+      .then(function () {
+        scheduleStatus.textContent = 'Saved.';
+        setTimeout(function () { scheduleStatus.textContent = ''; }, 2000);
+      })
+      .catch(function (err) {
+        scheduleStatus.textContent = 'Failed to save - try again.';
+        console.warn('ships-bells: failed to save schedule', err);
+      });
+  });
+
+  loadSchedule();
+
   var NOTIFICATION_PATH = 'notifications.plugins.signalkShipsBell.strike';
   var BELLS_BASE_URL = 'bells/';
 

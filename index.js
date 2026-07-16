@@ -20,6 +20,7 @@ module.exports = function (app) {
   let currentNavState;
   let audioPlayer;
   let audioPlayerLoadFailed = false;
+  let currentOptions = {};
 
   // Lazily require play-sound so the plugin still loads (and its config UI still
   // works) on systems where that optional dependency isn't installed, unless
@@ -204,10 +205,49 @@ module.exports = function (app) {
     }
   };
 
+  // ---- Webapp API -----------------------------------------------------------
+  //
+  // Lets the public/ webapp read and change the watch schedule at runtime,
+  // without needing the admin UI's plugin config screen.
+
+  plugin.registerWithRouter = function (router) {
+    router.get('/schedule', (req, res) => {
+      const schemeSchema = plugin.schema.properties.watchScheme;
+      res.json({
+        watchScheme: currentOptions.watchScheme,
+        options: schemeSchema.enum.map((value, i) => ({
+          value,
+          label: schemeSchema.enumNames[i]
+        }))
+      });
+    });
+
+    router.put('/schedule', (req, res) => {
+      const validSchemes = plugin.schema.properties.watchScheme.enum;
+      const watchScheme = req.body && req.body.watchScheme;
+
+      if (!validSchemes.includes(watchScheme)) {
+        res.status(400).json({ error: `watchScheme must be one of: ${validSchemes.join(', ')}` });
+        return;
+      }
+
+      currentOptions.watchScheme = watchScheme;
+      app.savePluginOptions(currentOptions, (err) => {
+        if (err) {
+          app.error(`ships-bells: failed to save schedule option: ${err.message || err}`);
+          res.status(500).json({ error: 'Failed to save option' });
+          return;
+        }
+        res.json({ watchScheme: currentOptions.watchScheme });
+      });
+    });
+  };
+
   // ---- Lifecycle ------------------------------------------------------------
 
   plugin.start = function (options) {
     app.debug('starting ships-bell plugin', options);
+    currentOptions = options;
 
     if (options.enabled === false) {
       return;
@@ -219,7 +259,7 @@ module.exports = function (app) {
         currentNavState = value;
       });
 
-    scheduleNextStrike(options);
+    scheduleNextStrike(currentOptions);
   };
 
   plugin.stop = function () {
