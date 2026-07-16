@@ -4,8 +4,9 @@ A [SignalK Server](https://github.com/SignalK/signalk-server) plugin that plays 
 
 ## Status
 
-Watch-bell scheduling logic is implemented; audio playback (the actual sound
-output) is still a TODO — see `index.js`.
+Watch-bell scheduling and playback are both implemented: `index.js` computes
+the strike schedule and emits a notification delta; the `public/` webapp
+listens for it over the SignalK websocket and plays the matching audio file.
 
 ## Features
 
@@ -30,9 +31,13 @@ output) is still a TODO — see `index.js`.
   - **Mute bell when at anchor or moored** — skips playback while
     `navigation.state` is `anchored` or `moored`. Requires that path to be
     populated by something on your system — see below.
-- Audio playback: likely via a SignalK webapp `<audio>` element triggered by a
-  delta, so it plays wherever the webapp is open (e.g. on an MFD or tablet at
-  the helm).
+- Audio playback: each strike is sent as a `notifications.plugins.signalkShipsBell.strike`
+  delta. The bundled webapp (open it from the SignalK admin UI's webapps list,
+  or at `/signalk-ships-bell/`) subscribes to that delta over the websocket and
+  plays the matching file via `<audio>` — so it sounds wherever that page is
+  open (e.g. a browser tab on an MFD or tablet at the helm). A "play test
+  bell" button is included for checking that audio works without waiting for
+  the next half hour.
 
 ## Recommended companion plugins
 
@@ -44,9 +49,10 @@ output) is still a TODO — see `index.js`.
 
 ## Audio assets
 
-`assets/bells/` bundles one WAV file per strike count, `bell-strikes-1.wav` through
-`bell-strikes-8.wav`. These are sourced from Benboncan's "Bells / Gongs" pack on
-Freesound (CC BY 4.0) — see `assets/bells/NOTICE.md` for full attribution.
+`public/bells/` bundles one WAV file per strike count, `bell-strikes-1.wav` through
+`bell-strikes-8.wav`, served statically by SignalK server's signalk-webapp hosting
+at `/signalk-ships-bell/bells/`. These are sourced from Benboncan's "Bells / Gongs"
+pack on Freesound (CC BY 4.0) — see `public/bells/NOTICE.md` for full attribution.
 
 ## Install
 

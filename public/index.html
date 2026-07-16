@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Ship's Bell</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    body {
+      font-family: system-ui, sans-serif;
+      max-width: 480px;
+      margin: 2rem auto;
+      padding: 0 1rem;
+      color: #222;
+    }
+    h1 {
+      font-size: 1.25rem;
+    }
+    #status {
+      font-size: 0.9rem;
+      color: #666;
+      margin-bottom: 1rem;
+    }
+    #last-strike {
+      font-size: 1.1rem;
+      margin-bottom: 1rem;
+    }
+    button {
+      font-size: 1rem;
+      padding: 0.5rem 1rem;
+    }
+  </style>
+</head>
+<body>
+  <h1>Ship's Bell</h1>
+  <div id="status">Connecting...</div>
+  <div id="last-strike">No strikes yet this session.</div>
+  <button id="test-button">Play test bell (8 bells)</button>
+  <audio id="bell-audio"></audio>
+  <script src="app.js"></script>
+</body>
+</html>

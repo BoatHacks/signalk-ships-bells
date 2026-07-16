@@ -1,5 +1,3 @@
-const path = require('path');
-
 module.exports = function (app) {
   const plugin = {};
 
@@ -7,8 +5,9 @@ module.exports = function (app) {
   plugin.name = "Ship's Bell";
   plugin.description = "Plays traditional ship's bell audio on the watch schedule";
 
-  // One audio file per strike count (1-8), e.g. bell-strikes-3.wav for three bells
-  const bellsDir = path.join(__dirname, 'assets', 'bells');
+  // One audio file per strike count (1-8), e.g. bell-strikes-3.wav for three bells.
+  // Served statically from public/bells/ by SignalK server's signalk-webapp hosting,
+  // at /signalk-ships-bell/bells/<file>.
   const bellFile = (strikes) => `bell-strikes-${strikes}.wav`;
 
   let halfHourTimer;
@@ -70,12 +69,10 @@ module.exports = function (app) {
     }
 
     app.debug(`ships-bell: striking ${strikes} bell(s), file ${bellFile(strikes)}`);
-    // TODO: actually trigger playback. Likely approach: emit a delta here that a
-    // companion webapp (served from this plugin, connected via the SignalK
-    // websocket) listens for and plays as <audio src=".../assets/bells/...">,
-    // so it works wherever the webapp is open (helm tablet, MFD, etc). Emitting
-    // it as a notification keeps it visible to any SignalK client in the
-    // meantime, even before that webapp exists:
+    // The public/ webapp (served at /signalk-ships-bell/) subscribes to this
+    // notification over the SignalK websocket and plays the referenced file
+    // via <audio>, so it sounds wherever that webapp is open (helm tablet,
+    // MFD browser, etc). Anything else on the SignalK bus can react to it too.
     app.handleMessage(plugin.id, {
       updates: [
         {
