@@ -177,8 +177,8 @@ module.exports = function (app) {
           "All other watches (1-8 bells every half hour) are the same in every scheme.",
         enum: ['traditional', 'simple-cycle', 'pre-1797'],
         enumNames: [
-          'Traditional (resets to 1 bell at the second dog watch, avoiding the old "five bells" mutiny signal)',
-          'Simple cycle (ignores the dog-watch split, just cycles 1-8 all day)',
+          'British Navy (resets to 1 bell at the second dog watch, avoiding the old "five bells" mutiny signal)',
+          'Standard (ignores the dog-watch split, just cycles 1-8 all day)',
           'Pre-1797 (continues 5-6-7 bells through the second dog watch)'
         ],
         default: 'traditional'

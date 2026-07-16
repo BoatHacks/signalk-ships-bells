@@ -20,15 +20,15 @@ listens for it over the SignalK websocket and plays the matching audio file.
   - **Enable bell strikes** — on/off.
   - **Watch bell schedule** — three selectable conventions for the second dog
     watch (18:00–20:00), the one place historical practice diverges:
-    - *Traditional* — resets to 1 bell at 18:30 instead of continuing 5-6-7,
+    - *British Navy* — resets to 1 bell at 18:30 instead of continuing 5-6-7,
       per the post-1797 Royal Navy convention adopted after the Nore mutiny
       (five bells in the second dog watch had been the mutiny's signal).
-    - *Simple cycle* — ignores the dog-watch split as a concept and just
+    - *Standard* — ignores the dog-watch split as a concept and just
       cycles 1–8 every 4 hours all day.
     - *Pre-1797* — the older convention, continuing 5-6-7 bells through the
       second dog watch before the full 8 at the watch change.
 
-      (Simple cycle and pre-1797 produce identical strike patterns — splitting
+      (Standard and pre-1797 produce identical strike patterns — splitting
       a 4-hour watch into two 2-hour ones doesn't change the half-hourly count
       unless something resets it. They're offered as separate, differently
       labeled options rather than because the underlying schedule differs.)
