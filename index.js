@@ -92,6 +92,31 @@ module.exports = function (app) {
 
   // ---- Playback -----------------------------------------------------------
 
+  function playOnServerSpeaker(strikes) {
+    // Plays directly on the machine running SignalK, via a speaker wired to it -
+    // no browser/webapp needed. Same idea as signalk-audio-notifications, using
+    // play-sound to shell out to a system player (mpg123, aplay, etc).
+    const player = getAudioPlayer();
+    if (!player) {
+      return false;
+    }
+    player.play(bellFilePath(strikes), (err) => {
+      if (err) {
+        app.error(`ships-bells: server-speaker playback failed: ${err.message || err}`);
+      }
+    });
+    return true;
+  }
+
+  // Test-only hook: lets the test suite inject a fake player (rather than the
+  // real play-sound, which would shell out to whatever audio binary happens to
+  // be on the machine running the tests - including CI runners - and can hang
+  // rather than fail fast when there's no audio device to play through).
+  plugin._setAudioPlayerForTesting = function (fakePlayer) {
+    audioPlayer = fakePlayer;
+    audioPlayerLoadFailed = false;
+  };
+
   function strikeBell(strikes, options) {
     const muted = options.muteWhenAnchoredOrMoored && MUTED_STATES.includes(currentNavState);
 
@@ -127,17 +152,7 @@ module.exports = function (app) {
     }
 
     if (method === 'server-speaker' || method === 'both') {
-      // Plays directly on the machine running SignalK, via a speaker wired to it -
-      // no browser/webapp needed. Same idea as signalk-audio-notifications, using
-      // play-sound to shell out to a system player (mpg123, aplay, etc).
-      const player = getAudioPlayer();
-      if (player) {
-        player.play(bellFilePath(strikes), (err) => {
-          if (err) {
-            app.error(`ships-bells: server-speaker playback failed: ${err.message || err}`);
-          }
-        });
-      }
+      playOnServerSpeaker(strikes);
     }
   }
 
@@ -243,6 +258,27 @@ module.exports = function (app) {
           return;
         }
         res.json({ watchScheme: currentOptions.watchScheme });
+      });
+    });
+
+    // Lets the "play test bell" button in the webapp also exercise server-speaker
+    // output when that's part of the configured playback method - a plain client-side
+    // <audio> play() can't reach the SignalK host's own speaker, so this is the only
+    // way the test button can cover that path. Intentionally ignores the
+    // anchored/moored mute setting, since a test triggered by hand is deliberate.
+    router.post('/test-strike', (req, res) => {
+      const method = currentOptions.playbackMethod || 'webapp';
+      const strikes = 8;
+
+      if (method !== 'server-speaker' && method !== 'both') {
+        res.json({ playedOnServerSpeaker: false, reason: 'playbackMethod is webapp-only' });
+        return;
+      }
+
+      const played = playOnServerSpeaker(strikes);
+      res.json({
+        playedOnServerSpeaker: played,
+        reason: played ? undefined : 'play-sound unavailable - check server logs'
       });
     });
   };

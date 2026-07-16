@@ -42,7 +42,10 @@ listens for it over the SignalK websocket and plays the matching audio file.
       websocket and plays the matching file via `<audio>` — so it sounds
       wherever that page is open (e.g. a browser tab on an MFD or tablet at
       the helm). A "play test bell" button is included for checking that
-      audio works without waiting for the next half hour.
+      audio works without waiting for the next half hour - it plays locally
+      in the browser immediately, and also asks the plugin to attempt
+      server-speaker playback if that's part of the configured playback
+      method, so it exercises whichever output(s) are actually configured.
     - *Server speaker* — plays directly on the machine running Signal K, via a
       speaker wired to it, using [play-sound](https://www.npmjs.com/package/play-sound)
       to shell out to a system audio player. No browser needed. This is the

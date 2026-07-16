@@ -135,6 +135,18 @@
 
   testButton.addEventListener('click', function () {
     playStrike(8, 'Test: 8 bells');
+    fetch(API_BASE + '/test-strike', { method: 'POST' })
+      .then(function (res) { return res.json(); })
+      .then(function (data) {
+        if (data.playedOnServerSpeaker) {
+          console.log('ships-bells: test also played on server speaker');
+        } else if (data.reason && data.reason !== 'playbackMethod is webapp-only') {
+          console.warn('ships-bells: server-speaker test failed -', data.reason);
+        }
+      })
+      .catch(function (err) {
+        console.warn('ships-bells: could not reach test-strike endpoint', err);
+      });
   });
 
   function connect() {

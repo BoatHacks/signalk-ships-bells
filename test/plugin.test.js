@@ -21,10 +21,11 @@ function makeMockApp(overrides) {
 }
 
 function makeFakeRouter() {
-  const routes = { get: {}, put: {} };
+  const routes = { get: {}, put: {}, post: {} };
   return {
     get: (path, handler) => { routes.get[path] = handler; },
     put: (path, handler) => { routes.put[path] = handler; },
+    post: (path, handler) => { routes.post[path] = handler; },
     routes
   };
 }
@@ -175,6 +176,68 @@ test('PUT /schedule returns 500 if savePluginOptions fails', () => {
   router.routes.put['/schedule']({ body: { watchScheme: 'pre-1797' } }, res);
 
   assert.strictEqual(res.statusCode, 500);
+
+  plugin.stop();
+});
+
+test('POST /test-strike does not touch server speaker when playbackMethod is webapp', () => {
+  const app = makeMockApp();
+  const plugin = createPlugin(app);
+  const router = makeFakeRouter();
+  plugin.registerWithRouter(router);
+  plugin.start({ enabled: true, watchScheme: 'traditional', playbackMethod: 'webapp', muteWhenAnchoredOrMoored: true });
+
+  const res = makeFakeRes();
+  router.routes.post['/test-strike']({}, res);
+
+  assert.strictEqual(res.body.playedOnServerSpeaker, false);
+  assert.strictEqual(res.body.reason, 'playbackMethod is webapp-only');
+
+  plugin.stop();
+});
+
+test('POST /test-strike attempts server speaker playback when playbackMethod is server-speaker or both', () => {
+  for (const method of ['server-speaker', 'both']) {
+    const played = [];
+    const app = makeMockApp();
+    const plugin = createPlugin(app);
+    const router = makeFakeRouter();
+    plugin.registerWithRouter(router);
+    plugin._setAudioPlayerForTesting({
+      play: (file, cb) => { played.push(file); cb(null); }
+    });
+    plugin.start({ enabled: true, watchScheme: 'traditional', playbackMethod: method, muteWhenAnchoredOrMoored: true });
+
+    const res = makeFakeRes();
+    router.routes.post['/test-strike']({}, res);
+
+    assert.strictEqual(res.body.playedOnServerSpeaker, true);
+    assert.strictEqual(played.length, 1);
+    assert.ok(played[0].endsWith('bell-strikes-8.wav'));
+
+    plugin.stop();
+  }
+});
+
+test('POST /test-strike ignores navigation.state (mute setting does not block a manual test)', () => {
+  const app = makeMockApp();
+  const plugin = createPlugin(app);
+  const router = makeFakeRouter();
+  plugin.registerWithRouter(router);
+  const played = [];
+  plugin._setAudioPlayerForTesting({
+    play: (file, cb) => { played.push(file); cb(null); }
+  });
+  plugin.start({ enabled: true, watchScheme: 'traditional', playbackMethod: 'server-speaker', muteWhenAnchoredOrMoored: true });
+
+  const res = makeFakeRes();
+  router.routes.post['/test-strike']({}, res);
+
+  // Would be rejected/skipped by strikeBell()'s mute check if this endpoint
+  // routed through it - it doesn't, so it always attempts playback regardless
+  // of navigation.state (which isn't even set here).
+  assert.strictEqual(res.body.playedOnServerSpeaker, true);
+  assert.strictEqual(played.length, 1);
 
   plugin.stop();
 });
