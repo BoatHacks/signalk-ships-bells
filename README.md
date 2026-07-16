@@ -98,4 +98,5 @@ Windows, and Raspberry Pi-class Node versions.
 
 ## License
 
-MIT
+Source code: MIT. Bundled bell audio (`public/bells/`): CC BY 4.0, attributed to
+Benboncan on Freesound. See `LICENSE` for the full text of both.
