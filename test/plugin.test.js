@@ -242,7 +242,7 @@ test('POST /test-strike ignores navigation.state (mute setting does not block a 
   plugin.stop();
 });
 
-test("scheduler rings 16 bells once at New Year's midnight, 13s early, and resumes normally afterward without looping", (t) => {
+test("New Year's Eve gets an extra 8-bell strike at 23:59:47, independent of and in addition to the regular schedule's own 00:00:00 strike", (t) => {
   const strikeLog = [];
   const app = makeMockApp({
     handleMessage: (id, delta) => {
@@ -257,16 +257,17 @@ test("scheduler rings 16 bells once at New Year's midnight, 13s early, and resum
   const plugin = createPlugin(app);
   plugin.start({ enabled: true, watchScheme: 'traditional', playbackMethod: 'webapp', muteWhenAnchoredOrMoored: false });
 
-  t.mock.timers.tick(7 * 1000); // -> 23:59:47, the early-triggered 16-bell strike
-  assert.deepStrictEqual(strikeLog.map((s) => s.strikes), [16]);
+  t.mock.timers.tick(7 * 1000); // -> 23:59:47, the extra New Year's strike
+  assert.deepStrictEqual(strikeLog.map((s) => s.strikes), [8]);
   assert.strictEqual(strikeLog[0].at, '2026-12-31T23:59:47.000Z');
 
-  t.mock.timers.tick(13 * 1000); // -> 00:00:00 exactly - past the real boundary; must NOT have struck again
-  assert.deepStrictEqual(strikeLog.map((s) => s.strikes), [16]);
+  t.mock.timers.tick(13 * 1000); // -> 00:00:00 exactly, the regular schedule's own strike
+  assert.deepStrictEqual(strikeLog.map((s) => s.strikes), [8, 8]);
+  assert.strictEqual(strikeLog[1].at, '2027-01-01T00:00:00.000Z');
 
   t.mock.timers.tick(30 * 60 * 1000); // -> 00:30:00, the next normal half-hour strike
-  assert.deepStrictEqual(strikeLog.map((s) => s.strikes), [16, 1]);
-  assert.strictEqual(strikeLog[1].at, '2027-01-01T00:30:00.000Z');
+  assert.deepStrictEqual(strikeLog.map((s) => s.strikes), [8, 8, 1]);
+  assert.strictEqual(strikeLog[2].at, '2027-01-01T00:30:00.000Z');
 
   plugin.stop();
 });

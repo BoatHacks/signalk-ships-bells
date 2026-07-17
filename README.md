@@ -15,15 +15,14 @@ listens for it over the SignalK websocket and plays the matching audio file.
 ## Features
 
 - Strikes the bell every half hour, 1–8 bells, following the traditional watch
-  schedule - except at midnight on New Year's (31 Dec → 1 Jan, ship-local
-  time), when it rings 16 bells instead: eight for the old year, eight for
-  the new, per maritime tradition. Playback actually starts 13 seconds before
-  midnight (`bell-strikes-8.wav` is ~12.78s long), so the boundary between the
-  two sets of 8 strikes lands right on the stroke of midnight rather than
-  starting there and running late. This override applies regardless of the
-  watch bell schedule selected below, and uses a dedicated
-  `bell-strikes-16.wav` (see Audio assets). Configurable in the SignalK admin
-  UI (Server → Plugin Config → Ship's Bell):
+  schedule - plus one extra 8-bell strike at 23:59:47 on New Year's Eve
+  (31 Dec, ship-local time), 13 seconds before midnight. `bell-strikes-8.wav`
+  is ~12.78s long, so it finishes right around the stroke of midnight, just
+  ahead of the regular 00:00:00 strike (which always rings 8 bells anyway,
+  on every schedule) - giving the traditional 16 bells for New Year's without
+  needing a dedicated audio file or any change to the normal schedule.
+  Configurable in the SignalK admin UI (Server → Plugin Config → Ship's
+  Bell):
   - **Enable bell strikes** — on/off.
   - **Watch bell schedule** — two selectable conventions for the second dog
     watch (18:00–20:00), the one place historical practice diverges:
@@ -81,10 +80,6 @@ listens for it over the SignalK websocket and plays the matching audio file.
 `bell-strikes-8.wav`, served statically by SignalK server's signalk-webapp hosting
 at `/signalk-ships-bells/bells/`. These are sourced from Benboncan's "Bells / Gongs"
 pack on Freesound (CC BY 4.0) — see `public/bells/NOTICE.md` for full attribution.
-
-`bell-strikes-16.wav`, used only at New Year's midnight, is a derivative made by
-concatenating `bell-strikes-8.wav` with itself (with a short pause in between) -
-same license and attribution.
 
 ## Install
 

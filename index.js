@@ -80,26 +80,27 @@ function isWithinQuietHours(currentMinutes, startStr, endStr) {
   return currentMinutes >= start || currentMinutes < end;
 }
 
-// ---- New Year's midnight (16 bells) --------------------------------------
+// ---- New Year's midnight (extra 8 bells) ---------------------------------
 //
 // Traditional at sea: 16 bells at midnight on New Year's Eve - eight for the
-// old year, eight for the new - rather than the usual 8. This overrides the
-// normal per-scheme calculation for that one moment only (local ship time).
+// old year, eight for the new. Implemented simply as an extra, independent
+// 8-bell strike shortly before midnight, on top of the regular half-hour
+// schedule's own 8-bell strike at 00:00:00 (which already happens on every
+// scheme - see "watch changes always ring 8 bells" in the tests). No
+// override of the normal bell-count logic is needed.
 
-function isNewYearMidnight(date) {
-  return date.getMonth() === 0 && date.getDate() === 1 && date.getHours() === 0 && date.getMinutes() === 0;
-}
-
-// bell-strikes-8.wav is ~12.78s long. The New Year's 16-bell audio is that
-// file played twice, so starting it this many seconds before midnight lands
-// the boundary between the two halves right on the stroke of midnight.
+// bell-strikes-8.wav is ~12.78s long. Firing the extra strike this many
+// seconds before midnight means it finishes right around the stroke of
+// midnight, just ahead of the regular 00:00:00 strike.
 const NEW_YEAR_EARLY_TRIGGER_SECONDS = 13;
 
-function strikesForMoment(date, scheme) {
-  if (isNewYearMidnight(date)) {
-    return 16;
+function nextNewYearEveTriggerTime(now) {
+  const seconds = 60 - NEW_YEAR_EARLY_TRIGGER_SECONDS; // 47
+  let candidate = new Date(now.getFullYear(), 11, 31, 23, 59, seconds, 0);
+  if (candidate.getTime() <= now.getTime()) {
+    candidate = new Date(now.getFullYear() + 1, 11, 31, 23, 59, seconds, 0);
   }
-  return bellCountForMinutes(minutesSinceMidnight(date), scheme);
+  return candidate;
 }
 
 module.exports = function (app) {
@@ -117,6 +118,7 @@ module.exports = function (app) {
   const bellFilePath = (strikes) => path.join(__dirname, 'public', 'bells', bellFile(strikes));
 
   let strikeTimer;
+  let newYearExtraStrikeTimer;
   let unsubscribeNavState;
   let currentNavState;
   let audioPlayer;
@@ -231,33 +233,46 @@ module.exports = function (app) {
     return 30 * 60 * 1000 - msPastHalfHour;
   }
 
-  function scheduleNextStrike(options, afterBoundary) {
-    const now = new Date();
-    let boundary = new Date(now.getTime() + msUntilNextHalfHourBoundary(now));
+  // setTimeout has a hard ~24.8 day limit (2^31-1 ms, a 32-bit signed int
+  // internally) - delays longer than that overflow and fire almost
+  // immediately instead of waiting. The New Year's extra strike needs to
+  // wait up to ~365 days between occurrences, so long delays are chunked
+  // into safe hops rather than a single setTimeout.
+  const MAX_SAFE_TIMEOUT_MS = 20 * 24 * 60 * 60 * 1000; // 20 days
 
-    // The New Year's early trigger fires *before* its boundary (see below), so
-    // at that point real time hasn't reached the boundary yet and the above
-    // would recompute the very same boundary again, causing an immediate
-    // repeat fire. Force progression to the next one instead.
-    if (afterBoundary && boundary.getTime() <= afterBoundary.getTime()) {
-      boundary = new Date(afterBoundary.getTime() + 30 * 60 * 1000);
+  function scheduleLongTimeout(delayMs, callback, storeTimerId) {
+    if (delayMs > MAX_SAFE_TIMEOUT_MS) {
+      storeTimerId(setTimeout(() => {
+        scheduleLongTimeout(delayMs - MAX_SAFE_TIMEOUT_MS, callback, storeTimerId);
+      }, MAX_SAFE_TIMEOUT_MS));
+      return;
     }
+    storeTimerId(setTimeout(callback, Math.max(0, delayMs)));
+  }
 
-    const strikes = strikesForMoment(boundary, options.watchScheme);
-
-    // bell-strikes-8.wav is ~12.78s long. For the New Year's 16-bell file
-    // (that file played twice back to back), start it NEW_YEAR_EARLY_TRIGGER_SECONDS
-    // before midnight so the first set of 8 strikes finishes right on the
-    // stroke of midnight, rather than starting there and running 12-13s late.
-    const fireAt = isNewYearMidnight(boundary)
-      ? new Date(boundary.getTime() - NEW_YEAR_EARLY_TRIGGER_SECONDS * 1000)
-      : boundary;
-    const delay = Math.max(0, fireAt.getTime() - now.getTime());
+  function scheduleNextStrike(options) {
+    const now = new Date();
+    const delay = msUntilNextHalfHourBoundary(now);
 
     strikeTimer = setTimeout(() => {
-      strikeBell(strikes, options);
-      scheduleNextStrike(options, boundary);
+      const t = new Date();
+      strikeBell(bellCountForMinutes(minutesSinceMidnight(t), options.watchScheme), options);
+      scheduleNextStrike(options);
     }, delay);
+  }
+
+  function scheduleNextNewYearExtraStrike(options) {
+    const now = new Date();
+    const delay = nextNewYearEveTriggerTime(now).getTime() - now.getTime();
+
+    scheduleLongTimeout(
+      delay,
+      () => {
+        strikeBell(8, options);
+        scheduleNextNewYearExtraStrike(options);
+      },
+      (timerId) => { newYearExtraStrikeTimer = timerId; }
+    );
   }
 
   // ---- Admin UI config ------------------------------------------------------
@@ -402,6 +417,7 @@ module.exports = function (app) {
       });
 
     scheduleNextStrike(currentOptions);
+    scheduleNextNewYearExtraStrike(currentOptions);
   };
 
   plugin.stop = function () {
@@ -409,6 +425,10 @@ module.exports = function (app) {
     if (strikeTimer) {
       clearTimeout(strikeTimer);
       strikeTimer = undefined;
+    }
+    if (newYearExtraStrikeTimer) {
+      clearTimeout(newYearExtraStrikeTimer);
+      newYearExtraStrikeTimer = undefined;
     }
     if (unsubscribeNavState) {
       unsubscribeNavState();
@@ -426,5 +446,4 @@ module.exports.bellCountForMinutes = bellCountForMinutes;
 module.exports.minutesSinceMidnight = minutesSinceMidnight;
 module.exports.parseTimeToMinutes = parseTimeToMinutes;
 module.exports.isWithinQuietHours = isWithinQuietHours;
-module.exports.isNewYearMidnight = isNewYearMidnight;
-module.exports.strikesForMoment = strikesForMoment;
+module.exports.nextNewYearEveTriggerTime = nextNewYearEveTriggerTime;

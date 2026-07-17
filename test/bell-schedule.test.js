@@ -5,8 +5,7 @@ const {
   minutesSinceMidnight,
   parseTimeToMinutes,
   isWithinQuietHours,
-  isNewYearMidnight,
-  strikesForMoment
+  nextNewYearEveTriggerTime
 } = require('../index.js');
 
 test('simple-cycle cycles 1-8 every 4 hours all day, including through the second dog watch', () => {
@@ -58,28 +57,42 @@ test('minutesSinceMidnight extracts hours/minutes and ignores seconds', () => {
   assert.strictEqual(minutesSinceMidnight(new Date(2026, 0, 1, 23, 59, 59)), 1439);
 });
 
-test('isNewYearMidnight is true only at exactly 00:00 on January 1st', () => {
-  assert.strictEqual(isNewYearMidnight(new Date(2027, 0, 1, 0, 0, 0)), true);
-  assert.strictEqual(isNewYearMidnight(new Date(2026, 11, 31, 23, 30, 0)), false); // Dec 31, 23:30
-  assert.strictEqual(isNewYearMidnight(new Date(2027, 0, 1, 0, 30, 0)), false); // Jan 1, 00:30
-  assert.strictEqual(isNewYearMidnight(new Date(2027, 0, 2, 0, 0, 0)), false); // Jan 2, 00:00
-  assert.strictEqual(isNewYearMidnight(new Date(2027, 5, 1, 0, 0, 0)), false); // June 1, 00:00
+test('nextNewYearEveTriggerTime returns 23:59:47 on Dec 31 of the current year, if that is still ahead', () => {
+  const now = new Date(2026, 5, 1, 12, 0, 0); // June 1, 2026, midday
+  const result = nextNewYearEveTriggerTime(now);
+  assert.strictEqual(result.getFullYear(), 2026);
+  assert.strictEqual(result.getMonth(), 11);
+  assert.strictEqual(result.getDate(), 31);
+  assert.strictEqual(result.getHours(), 23);
+  assert.strictEqual(result.getMinutes(), 59);
+  assert.strictEqual(result.getSeconds(), 47);
 });
 
-test('strikesForMoment rings 16 bells at New Year\'s midnight regardless of scheme, and matches bellCountForMinutes otherwise', () => {
-  for (const scheme of ['traditional', 'simple-cycle']) {
-    assert.strictEqual(strikesForMoment(new Date(2027, 0, 1, 0, 0, 0), scheme), 16);
-    // An ordinary midnight (not Jan 1st) still rings the normal 8
-    assert.strictEqual(strikesForMoment(new Date(2026, 5, 1, 0, 0, 0), scheme), 8);
-    // Half hour before/after New Year's midnight is unaffected
-    assert.strictEqual(
-      strikesForMoment(new Date(2026, 11, 31, 23, 30, 0), scheme),
-      bellCountForMinutes(1410, scheme)
-    );
-    assert.strictEqual(
-      strikesForMoment(new Date(2027, 0, 1, 0, 30, 0), scheme),
-      bellCountForMinutes(30, scheme)
-    );
+test('nextNewYearEveTriggerTime rolls over to next year once this year\'s has passed', () => {
+  const justAfter = new Date(2026, 11, 31, 23, 59, 48); // 1 second after the trigger time
+  const result = nextNewYearEveTriggerTime(justAfter);
+  assert.strictEqual(result.getFullYear(), 2027);
+  assert.strictEqual(result.getMonth(), 11);
+  assert.strictEqual(result.getDate(), 31);
+  assert.strictEqual(result.getHours(), 23);
+  assert.strictEqual(result.getMinutes(), 59);
+  assert.strictEqual(result.getSeconds(), 47);
+
+  // Exactly at the trigger time counts as "already passed" too (>=, not >)
+  const exactlyAt = new Date(2026, 11, 31, 23, 59, 47);
+  const result2 = nextNewYearEveTriggerTime(exactlyAt);
+  assert.strictEqual(result2.getFullYear(), 2027);
+});
+
+test('nextNewYearEveTriggerTime is always in the future relative to "now", never in the past', () => {
+  for (const now of [
+    new Date(2026, 0, 1, 0, 0, 0),
+    new Date(2026, 11, 31, 0, 0, 0),
+    new Date(2026, 11, 31, 23, 59, 46),
+    new Date(2026, 11, 31, 23, 59, 47),
+    new Date(2026, 11, 31, 23, 59, 48)
+  ]) {
+    assert.ok(nextNewYearEveTriggerTime(now).getTime() > now.getTime(), `failed for now=${now.toISOString()}`);
   }
 });
 
