@@ -1,6 +1,13 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { bellCountForMinutes, minutesSinceMidnight, parseTimeToMinutes, isWithinQuietHours } = require('../index.js');
+const {
+  bellCountForMinutes,
+  minutesSinceMidnight,
+  parseTimeToMinutes,
+  isWithinQuietHours,
+  isNewYearMidnight,
+  strikesForMoment
+} = require('../index.js');
 
 test('simple-cycle cycles 1-8 every 4 hours all day, including through the second dog watch', () => {
   for (let m = 30; m <= 1440; m += 30) {
@@ -49,6 +56,31 @@ test('minutesSinceMidnight extracts hours/minutes and ignores seconds', () => {
   assert.strictEqual(minutesSinceMidnight(new Date(2026, 0, 1, 18, 30, 45)), 1110);
   assert.strictEqual(minutesSinceMidnight(new Date(2026, 0, 1, 0, 0, 0)), 0);
   assert.strictEqual(minutesSinceMidnight(new Date(2026, 0, 1, 23, 59, 59)), 1439);
+});
+
+test('isNewYearMidnight is true only at exactly 00:00 on January 1st', () => {
+  assert.strictEqual(isNewYearMidnight(new Date(2027, 0, 1, 0, 0, 0)), true);
+  assert.strictEqual(isNewYearMidnight(new Date(2026, 11, 31, 23, 30, 0)), false); // Dec 31, 23:30
+  assert.strictEqual(isNewYearMidnight(new Date(2027, 0, 1, 0, 30, 0)), false); // Jan 1, 00:30
+  assert.strictEqual(isNewYearMidnight(new Date(2027, 0, 2, 0, 0, 0)), false); // Jan 2, 00:00
+  assert.strictEqual(isNewYearMidnight(new Date(2027, 5, 1, 0, 0, 0)), false); // June 1, 00:00
+});
+
+test('strikesForMoment rings 16 bells at New Year\'s midnight regardless of scheme, and matches bellCountForMinutes otherwise', () => {
+  for (const scheme of ['traditional', 'simple-cycle']) {
+    assert.strictEqual(strikesForMoment(new Date(2027, 0, 1, 0, 0, 0), scheme), 16);
+    // An ordinary midnight (not Jan 1st) still rings the normal 8
+    assert.strictEqual(strikesForMoment(new Date(2026, 5, 1, 0, 0, 0), scheme), 8);
+    // Half hour before/after New Year's midnight is unaffected
+    assert.strictEqual(
+      strikesForMoment(new Date(2026, 11, 31, 23, 30, 0), scheme),
+      bellCountForMinutes(1410, scheme)
+    );
+    assert.strictEqual(
+      strikesForMoment(new Date(2027, 0, 1, 0, 30, 0), scheme),
+      bellCountForMinutes(30, scheme)
+    );
+  }
 });
 
 test('parseTimeToMinutes parses valid HH:MM and rejects everything else', () => {

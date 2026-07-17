@@ -80,6 +80,23 @@ function isWithinQuietHours(currentMinutes, startStr, endStr) {
   return currentMinutes >= start || currentMinutes < end;
 }
 
+// ---- New Year's midnight (16 bells) --------------------------------------
+//
+// Traditional at sea: 16 bells at midnight on New Year's Eve - eight for the
+// old year, eight for the new - rather than the usual 8. This overrides the
+// normal per-scheme calculation for that one moment only (local ship time).
+
+function isNewYearMidnight(date) {
+  return date.getMonth() === 0 && date.getDate() === 1 && date.getHours() === 0 && date.getMinutes() === 0;
+}
+
+function strikesForMoment(date, scheme) {
+  if (isNewYearMidnight(date)) {
+    return 16;
+  }
+  return bellCountForMinutes(minutesSinceMidnight(date), scheme);
+}
+
 module.exports = function (app) {
   const plugin = {};
 
@@ -212,13 +229,13 @@ module.exports = function (app) {
 
     alignmentTimer = setTimeout(() => {
       const strikeTime = new Date();
-      const strikes = bellCountForMinutes(minutesSinceMidnight(strikeTime), options.watchScheme);
+      const strikes = strikesForMoment(strikeTime, options.watchScheme);
       strikeBell(strikes, options);
 
       // Once aligned to the half hour, a plain interval keeps us there
       halfHourTimer = setInterval(() => {
         const t = new Date();
-        strikeBell(bellCountForMinutes(minutesSinceMidnight(t), options.watchScheme), options);
+        strikeBell(strikesForMoment(t, options.watchScheme), options);
       }, 30 * 60 * 1000);
     }, msUntilNextHalfHour);
   }
@@ -393,3 +410,5 @@ module.exports.bellCountForMinutes = bellCountForMinutes;
 module.exports.minutesSinceMidnight = minutesSinceMidnight;
 module.exports.parseTimeToMinutes = parseTimeToMinutes;
 module.exports.isWithinQuietHours = isWithinQuietHours;
+module.exports.isNewYearMidnight = isNewYearMidnight;
+module.exports.strikesForMoment = strikesForMoment;

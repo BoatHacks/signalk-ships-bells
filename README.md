@@ -15,8 +15,12 @@ listens for it over the SignalK websocket and plays the matching audio file.
 ## Features
 
 - Strikes the bell every half hour, 1–8 bells, following the traditional watch
-  schedule. Configurable in the SignalK admin UI (Server → Plugin Config →
-  Ship's Bell):
+  schedule - except at midnight on New Year's (31 Dec → 1 Jan, ship-local
+  time), when it rings 16 bells instead: eight for the old year, eight for
+  the new, per maritime tradition. This override applies regardless of the
+  watch bell schedule selected below, and uses a dedicated
+  `bell-strikes-16.wav` (see Audio assets). Configurable in the SignalK admin
+  UI (Server → Plugin Config → Ship's Bell):
   - **Enable bell strikes** — on/off.
   - **Watch bell schedule** — two selectable conventions for the second dog
     watch (18:00–20:00), the one place historical practice diverges:
@@ -74,6 +78,10 @@ listens for it over the SignalK websocket and plays the matching audio file.
 `bell-strikes-8.wav`, served statically by SignalK server's signalk-webapp hosting
 at `/signalk-ships-bells/bells/`. These are sourced from Benboncan's "Bells / Gongs"
 pack on Freesound (CC BY 4.0) — see `public/bells/NOTICE.md` for full attribution.
+
+`bell-strikes-16.wav`, used only at New Year's midnight, is a derivative made by
+concatenating `bell-strikes-8.wav` with itself (with a short pause in between) -
+same license and attribution.
 
 ## Install
 
