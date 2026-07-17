@@ -5,7 +5,8 @@ const {
   minutesSinceMidnight,
   parseTimeToMinutes,
   isWithinQuietHours,
-  nextNewYearEveTriggerTime
+  nextNewYearEveTriggerTime,
+  nightVolumeFactorForMoment
 } = require('../index.js');
 
 test('simple-cycle cycles 1-8 every 4 hours all day, including through the second dog watch', () => {
@@ -128,4 +129,57 @@ test('isWithinQuietHours treats an equal or invalid start/end as "no range" rath
   assert.strictEqual(isWithinQuietHours(12 * 60, '22:00', '22:00'), false);
   assert.strictEqual(isWithinQuietHours(12 * 60, undefined, undefined), false);
   assert.strictEqual(isWithinQuietHours(12 * 60, 'garbage', '06:00'), false);
+});
+
+test('nightVolumeFactorForMoment is 1 (full volume) when the feature is disabled', () => {
+  const options = {
+    nightVolumeEnabled: false,
+    nightVolumeStart: '22:00',
+    nightVolumeEnd: '06:00',
+    nightVolumeLevel: 30
+  };
+  assert.strictEqual(nightVolumeFactorForMoment(new Date(2026, 0, 1, 23, 0, 0), options), 1);
+});
+
+test('nightVolumeFactorForMoment is 1 outside the configured range, even when enabled', () => {
+  const options = {
+    nightVolumeEnabled: true,
+    nightVolumeStart: '22:00',
+    nightVolumeEnd: '06:00',
+    nightVolumeLevel: 30
+  };
+  assert.strictEqual(nightVolumeFactorForMoment(new Date(2026, 0, 1, 12, 0, 0), options), 1); // midday
+});
+
+test('nightVolumeFactorForMoment returns level/100 within the configured overnight range', () => {
+  const options = {
+    nightVolumeEnabled: true,
+    nightVolumeStart: '22:00',
+    nightVolumeEnd: '06:00',
+    nightVolumeLevel: 30
+  };
+  assert.strictEqual(nightVolumeFactorForMoment(new Date(2026, 0, 1, 23, 0, 0), options), 0.3); // 23:00
+  assert.strictEqual(nightVolumeFactorForMoment(new Date(2026, 0, 1, 3, 0, 0), options), 0.3); // 03:00
+});
+
+test('nightVolumeFactorForMoment clamps an out-of-range level to 0-100', () => {
+  const inRange = new Date(2026, 0, 1, 23, 0, 0);
+  assert.strictEqual(
+    nightVolumeFactorForMoment(inRange, {
+      nightVolumeEnabled: true,
+      nightVolumeStart: '22:00',
+      nightVolumeEnd: '06:00',
+      nightVolumeLevel: 150
+    }),
+    1
+  );
+  assert.strictEqual(
+    nightVolumeFactorForMoment(inRange, {
+      nightVolumeEnabled: true,
+      nightVolumeStart: '22:00',
+      nightVolumeEnd: '06:00',
+      nightVolumeLevel: -20
+    }),
+    0
+  );
 });

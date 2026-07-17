@@ -39,6 +39,13 @@ listens for it over the SignalK websocket and plays the matching audio file.
     with a start and end time (`HH:MM`, 24-hour, ship-local time). The end
     time can be earlier than the start to span midnight, e.g. `22:00`–`06:00`.
     Independent of, and combinable with, the anchor/moored mute above.
+  - **Reduce volume during a time range** — for when full silence isn't
+    wanted, just quieter. Same `HH:MM` start/end shape as above (independent
+    of it — different range if you want), plus a reduced volume level (%).
+    Only affects webapp playback (browser volume), applied on top of
+    whatever the webapp's own volume slider is set to; server-speaker
+    playback via `play-sound` doesn't offer a portable way to control output
+    volume, so it always plays at full volume regardless of this setting.
   - **Playback method** — `webapp`, `server speaker`, or `both`:
     - *Webapp* — each strike is sent as a `notifications.plugins.signalkShipsBell.strike`
       delta. The bundled webapp (open it from the SignalK admin UI's webapps

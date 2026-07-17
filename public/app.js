@@ -117,8 +117,9 @@
     return BELLS_BASE_URL + 'bell-strikes-' + strikes + '.wav';
   }
 
-  function playStrike(strikes, label) {
+  function playStrike(strikes, label, volumeFactor) {
     audioEl.src = bellFileUrl(strikes);
+    audioEl.volume = (prefs.volume / 100) * (typeof volumeFactor === 'number' ? volumeFactor : 1);
     var playPromise = audioEl.play();
     if (playPromise && typeof playPromise.then === 'function') {
       playPromise
@@ -176,7 +177,7 @@
       delta.updates.forEach(function (update) {
         (update.values || []).forEach(function (v) {
           if (v.path === NOTIFICATION_PATH && v.value && v.value.data) {
-            playStrike(v.value.data.strikes, v.value.message);
+            playStrike(v.value.data.strikes, v.value.message, v.value.data.volumeFactor);
           }
         });
       });

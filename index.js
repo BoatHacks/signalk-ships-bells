@@ -80,6 +80,27 @@ function isWithinQuietHours(currentMinutes, startStr, endStr) {
   return currentMinutes >= start || currentMinutes < end;
 }
 
+// ---- Night-volume reduction -----------------------------------------------
+//
+// Like quiet hours, but instead of muting entirely it scales the webapp's
+// playback volume down during a time range - e.g. still audible but quieter
+// overnight. Reuses the same time-range check as quiet hours. Only applies
+// to webapp playback: play-sound doesn't offer a portable way to control
+// output volume across the different system audio players it can shell out
+// to, so server-speaker playback always plays at full volume regardless of
+// this setting.
+
+function nightVolumeFactorForMoment(date, options) {
+  if (!options.nightVolumeEnabled) {
+    return 1;
+  }
+  if (!isWithinQuietHours(minutesSinceMidnight(date), options.nightVolumeStart, options.nightVolumeEnd)) {
+    return 1;
+  }
+  const level = typeof options.nightVolumeLevel === 'number' ? options.nightVolumeLevel : 100;
+  return Math.max(0, Math.min(100, level)) / 100;
+}
+
 // ---- New Year's midnight (extra 8 bells) ---------------------------------
 //
 // Traditional at sea: 16 bells at midnight on New Year's Eve - eight for the
@@ -205,6 +226,7 @@ module.exports = function (app) {
       // notification over the SignalK websocket and plays the referenced file
       // via <audio>, so it sounds wherever that webapp is open (helm tablet,
       // MFD browser, etc). Anything else on the SignalK bus can react to it too.
+      const volumeFactor = nightVolumeFactorForMoment(new Date(), options);
       app.handleMessage(plugin.id, {
         updates: [
           {
@@ -214,7 +236,7 @@ module.exports = function (app) {
                 value: {
                   state: 'normal',
                   message: `${strikes} bell(s)`,
-                  data: { strikes, file: bellFile(strikes) }
+                  data: { strikes, file: bellFile(strikes), volumeFactor }
                 }
               }
             ]
@@ -337,6 +359,35 @@ module.exports = function (app) {
         title: 'Quiet hours end (HH:MM, 24-hour, ship-local time)',
         description: 'Can be earlier than the start time to span midnight, e.g. 22:00-06:00.',
         default: '06:00'
+      },
+      nightVolumeEnabled: {
+        type: 'boolean',
+        title: 'Reduce volume during a time range',
+        description:
+          "For when you don't want to mute the bell entirely, just have it quieter " +
+          "overnight. Only affects webapp playback (browser volume) - play-sound " +
+          "doesn't offer a portable way to control server-speaker output volume, " +
+          "so that always plays at full volume regardless of this setting.",
+        default: false
+      },
+      nightVolumeStart: {
+        type: 'string',
+        title: 'Reduced volume start (HH:MM, 24-hour, ship-local time)',
+        default: '22:00'
+      },
+      nightVolumeEnd: {
+        type: 'string',
+        title: 'Reduced volume end (HH:MM, 24-hour, ship-local time)',
+        description: 'Can be earlier than the start time to span midnight, e.g. 22:00-06:00.',
+        default: '06:00'
+      },
+      nightVolumeLevel: {
+        type: 'integer',
+        title: 'Reduced volume level (%)',
+        description: 'Applied on top of whatever volume the webapp itself is set to.',
+        minimum: 0,
+        maximum: 100,
+        default: 30
       }
     }
   };
@@ -447,3 +498,4 @@ module.exports.minutesSinceMidnight = minutesSinceMidnight;
 module.exports.parseTimeToMinutes = parseTimeToMinutes;
 module.exports.isWithinQuietHours = isWithinQuietHours;
 module.exports.nextNewYearEveTriggerTime = nextNewYearEveTriggerTime;
+module.exports.nightVolumeFactorForMoment = nightVolumeFactorForMoment;
