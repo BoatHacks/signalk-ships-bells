@@ -114,12 +114,12 @@ test('GET /schedule returns the current watch scheme and the full option list', 
   const plugin = createPlugin(app);
   const router = makeFakeRouter();
   plugin.registerWithRouter(router);
-  plugin.start({ enabled: true, watchScheme: 'pre-1797', playbackMethod: 'webapp', muteWhenAnchoredOrMoored: true });
+  plugin.start({ enabled: true, watchScheme: 'simple-cycle', playbackMethod: 'webapp', muteWhenAnchoredOrMoored: true });
 
   const res = makeFakeRes();
   router.routes.get['/schedule']({}, res);
 
-  assert.strictEqual(res.body.watchScheme, 'pre-1797');
+  assert.strictEqual(res.body.watchScheme, 'simple-cycle');
   assert.ok(Array.isArray(res.body.options));
   assert.strictEqual(res.body.options.length, plugin.schema.properties.watchScheme.enum.length);
   assert.ok(res.body.options.every((o) => typeof o.value === 'string' && typeof o.label === 'string'));
@@ -173,7 +173,7 @@ test('PUT /schedule returns 500 if savePluginOptions fails', () => {
   plugin.start({ enabled: true, watchScheme: 'traditional', playbackMethod: 'webapp', muteWhenAnchoredOrMoored: true });
 
   const res = makeFakeRes();
-  router.routes.put['/schedule']({ body: { watchScheme: 'pre-1797' } }, res);
+  router.routes.put['/schedule']({ body: { watchScheme: 'simple-cycle' } }, res);
 
   assert.strictEqual(res.statusCode, 500);
 

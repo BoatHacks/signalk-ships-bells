@@ -2,24 +2,23 @@ const path = require('path');
 
 // ---- Bell-count calculation --------------------------------------------
 //
-// All three schemes share the same underlying idea: bells cycle 1-8 every
-// 240 minutes (a 4-hour watch), struck on the half hour. The only place
-// they can differ is the second dog watch (18:00-20:00), which is where
-// the historical variants diverge:
+// Both schemes share the same underlying idea: bells cycle 1-8 every 240
+// minutes (a 4-hour watch), struck on the half hour. The only place they
+// differ is the second dog watch (18:00-20:00):
 //
 //  - "traditional" (post-1797 Royal Navy convention): the second dog watch
 //    resets the count to 1 instead of continuing 5-6-7, so that "five
 //    bells in the second dog watch" - the Nore mutiny signal - is never
 //    struck again. Sequence: 18:30=1, 19:00=2, 19:30=3, 20:00=8.
-//  - "pre-1797": the older convention, where the count simply continues
-//    5-6-7 before the full 8 at the watch change. Sequence: 18:30=5,
-//    19:00=6, 19:30=7, 20:00=8.
 //  - "simple-cycle": ignores the dog-watch split as a concept entirely and
-//    just cycles 1-8 every 240 minutes all day. This produces the exact
-//    same strikes as "pre-1797" (splitting a 4-hour watch into two 2-hour
-//    ones doesn't change the half-hour count unless something resets it),
-//    so it's offered as a separate, more approachable option/label rather
-//    than a different calculation.
+//    just cycles 1-8 every 240 minutes all day, including through the
+//    second dog watch (18:30=5, 19:00=6, 19:30=7, 20:00=8).
+//
+// (There used to be a third "pre-1797" option here, but it produced exactly
+// the same strikes as "simple-cycle" - splitting a 4-hour watch into two
+// 2-hour ones doesn't change the half-hourly count unless something resets
+// it - so it was removed as a redundant, confusing duplicate rather than a
+// genuinely different schedule.)
 //
 // Pulled out to module scope (rather than inside the plugin factory below)
 // so the test suite can exercise this pure logic directly, without needing
@@ -34,8 +33,8 @@ function bellCountForMinutes(minutesSinceMidnight, scheme) {
     return resetSequence[offset];
   }
 
-  // "pre-1797" and "simple-cycle" (and "traditional" outside the second
-  // dog watch) all follow the plain 240-minute cycle.
+  // "simple-cycle" (and "traditional" outside the second dog watch) follow
+  // the plain 240-minute cycle.
   const cyclePosition = minutesSinceMidnight % 240;
   const idx = cyclePosition / 30;
   return idx === 0 ? 8 : idx;
@@ -240,11 +239,10 @@ module.exports = function (app) {
         description:
           "Which historical convention to use for the second dog watch (18:00-20:00). " +
           "All other watches (1-8 bells every half hour) are the same in every scheme.",
-        enum: ['traditional', 'simple-cycle', 'pre-1797'],
+        enum: ['traditional', 'simple-cycle'],
         enumNames: [
           'British Navy (resets to 1 bell at the second dog watch, avoiding the old "five bells" mutiny signal)',
-          'Standard (ignores the dog-watch split, just cycles 1-8 all day)',
-          'Pre-1797 (continues 5-6-7 bells through the second dog watch)'
+          'Standard (ignores the dog-watch split, just cycles 1-8 all day)'
         ],
         default: 'traditional'
       },
