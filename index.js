@@ -90,6 +90,11 @@ function isNewYearMidnight(date) {
   return date.getMonth() === 0 && date.getDate() === 1 && date.getHours() === 0 && date.getMinutes() === 0;
 }
 
+// bell-strikes-8.wav is ~12.78s long. The New Year's 16-bell audio is that
+// file played twice, so starting it this many seconds before midnight lands
+// the boundary between the two halves right on the stroke of midnight.
+const NEW_YEAR_EARLY_TRIGGER_SECONDS = 13;
+
 function strikesForMoment(date, scheme) {
   if (isNewYearMidnight(date)) {
     return 16;
@@ -111,8 +116,7 @@ module.exports = function (app) {
   const bellFile = (strikes) => `bell-strikes-${strikes}.wav`;
   const bellFilePath = (strikes) => path.join(__dirname, 'public', 'bells', bellFile(strikes));
 
-  let halfHourTimer;
-  let alignmentTimer;
+  let strikeTimer;
   let unsubscribeNavState;
   let currentNavState;
   let audioPlayer;
@@ -222,22 +226,38 @@ module.exports = function (app) {
     }
   }
 
-  function scheduleNextStrike(options) {
-    const now = new Date();
+  function msUntilNextHalfHourBoundary(now) {
     const msPastHalfHour = ((now.getMinutes() % 30) * 60 + now.getSeconds()) * 1000 + now.getMilliseconds();
-    const msUntilNextHalfHour = 30 * 60 * 1000 - msPastHalfHour;
+    return 30 * 60 * 1000 - msPastHalfHour;
+  }
 
-    alignmentTimer = setTimeout(() => {
-      const strikeTime = new Date();
-      const strikes = strikesForMoment(strikeTime, options.watchScheme);
+  function scheduleNextStrike(options, afterBoundary) {
+    const now = new Date();
+    let boundary = new Date(now.getTime() + msUntilNextHalfHourBoundary(now));
+
+    // The New Year's early trigger fires *before* its boundary (see below), so
+    // at that point real time hasn't reached the boundary yet and the above
+    // would recompute the very same boundary again, causing an immediate
+    // repeat fire. Force progression to the next one instead.
+    if (afterBoundary && boundary.getTime() <= afterBoundary.getTime()) {
+      boundary = new Date(afterBoundary.getTime() + 30 * 60 * 1000);
+    }
+
+    const strikes = strikesForMoment(boundary, options.watchScheme);
+
+    // bell-strikes-8.wav is ~12.78s long. For the New Year's 16-bell file
+    // (that file played twice back to back), start it NEW_YEAR_EARLY_TRIGGER_SECONDS
+    // before midnight so the first set of 8 strikes finishes right on the
+    // stroke of midnight, rather than starting there and running 12-13s late.
+    const fireAt = isNewYearMidnight(boundary)
+      ? new Date(boundary.getTime() - NEW_YEAR_EARLY_TRIGGER_SECONDS * 1000)
+      : boundary;
+    const delay = Math.max(0, fireAt.getTime() - now.getTime());
+
+    strikeTimer = setTimeout(() => {
       strikeBell(strikes, options);
-
-      // Once aligned to the half hour, a plain interval keeps us there
-      halfHourTimer = setInterval(() => {
-        const t = new Date();
-        strikeBell(strikesForMoment(t, options.watchScheme), options);
-      }, 30 * 60 * 1000);
-    }, msUntilNextHalfHour);
+      scheduleNextStrike(options, boundary);
+    }, delay);
   }
 
   // ---- Admin UI config ------------------------------------------------------
@@ -386,13 +406,9 @@ module.exports = function (app) {
 
   plugin.stop = function () {
     app.debug('stopping ships-bell plugin');
-    if (alignmentTimer) {
-      clearTimeout(alignmentTimer);
-      alignmentTimer = undefined;
-    }
-    if (halfHourTimer) {
-      clearInterval(halfHourTimer);
-      halfHourTimer = undefined;
+    if (strikeTimer) {
+      clearTimeout(strikeTimer);
+      strikeTimer = undefined;
     }
     if (unsubscribeNavState) {
       unsubscribeNavState();
