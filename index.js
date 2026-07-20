@@ -235,6 +235,7 @@ module.exports = function (app) {
                 path: 'notifications.plugins.signalkShipsBell.strike',
                 value: {
                   state: 'normal',
+                  method: [],
                   message: `${strikes} bell(s)`,
                   data: { strikes, file: bellFile(strikes), volumeFactor }
                 }
