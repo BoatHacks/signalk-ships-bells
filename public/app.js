@@ -59,11 +59,32 @@
   var scheduleStatus = document.getElementById('schedule-status');
   var API_BASE = '/plugins/signalk-ships-bells';
 
+  // Signal K's admin UI login is token-based (a JWT stored in localStorage),
+  // not cookie-based, so being logged into the admin UI in this browser does
+  // NOT automatically authenticate this webapp's own fetch calls - the token
+  // has to be read out of localStorage and sent explicitly. localStorage is
+  // shared across pages on the same origin, so this picks up the same login
+  // used by the admin UI (and any other Signal K webapp) without a separate
+  // login step here.
+  function authHeaders() {
+    var token = localStorage.getItem('token');
+    return token ? { Authorization: 'Bearer ' + token } : {};
+  }
+
+  function statusTextForResponse(res, fallback) {
+    if (res.status === 401 || res.status === 403) {
+      return 'Log in to the Signal K server to ' + fallback + '.';
+    }
+    return null;
+  }
+
   function loadSchedule() {
-    fetch(API_BASE + '/schedule')
+    fetch(API_BASE + '/schedule', { headers: authHeaders() })
       .then(function (res) {
         if (!res.ok) {
-          throw new Error('status ' + res.status);
+          var err = new Error('status ' + res.status);
+          err.statusText = statusTextForResponse(res, 'load the schedule');
+          throw err;
         }
         return res.json();
       })
@@ -79,7 +100,7 @@
         scheduleSelect.disabled = false;
       })
       .catch(function (err) {
-        scheduleStatus.textContent = 'Could not load schedule options.';
+        scheduleStatus.textContent = err.statusText || 'Could not load schedule options.';
         console.warn('ships-bells: failed to load schedule', err);
       });
   }
@@ -89,12 +110,14 @@
     scheduleStatus.textContent = 'Saving...';
     fetch(API_BASE + '/schedule', {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
+      headers: Object.assign({ 'Content-Type': 'application/json' }, authHeaders()),
       body: JSON.stringify({ watchScheme: watchScheme })
     })
       .then(function (res) {
         if (!res.ok) {
-          throw new Error('status ' + res.status);
+          var err = new Error('status ' + res.status);
+          err.statusText = statusTextForResponse(res, 'change the schedule');
+          throw err;
         }
         return res.json();
       })
@@ -103,7 +126,7 @@
         setTimeout(function () { scheduleStatus.textContent = ''; }, 2000);
       })
       .catch(function (err) {
-        scheduleStatus.textContent = 'Failed to save - try again.';
+        scheduleStatus.textContent = err.statusText || 'Failed to save - try again.';
         console.warn('ships-bells: failed to save schedule', err);
       });
   });
