@@ -1,5 +1,3 @@
-@no-slop.md
-
 # signalk-ships-bells
 
 SignalK plugin playing traditional ship's bell audio on the watch schedule
