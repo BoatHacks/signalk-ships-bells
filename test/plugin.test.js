@@ -180,6 +180,123 @@ test('PUT /schedule returns 500 if savePluginOptions fails', () => {
   plugin.stop();
 });
 
+test('GET /offset returns the current offset settings, defaulting minutes to 0', () => {
+  const app = makeMockApp();
+  const plugin = createPlugin(app);
+  const router = makeFakeRouter();
+  plugin.registerWithRouter(router);
+  plugin.start({ enabled: true, watchScheme: 'traditional', playbackMethod: 'webapp', muteWhenAnchoredOrMoored: true });
+
+  const res = makeFakeRes();
+  router.routes.get['/offset']({}, res);
+
+  assert.deepStrictEqual(res.body, { utcOffsetEnabled: false, utcOffsetMinutes: 0 });
+
+  plugin.stop();
+});
+
+test('PUT /offset rejects a non-boolean utcOffsetEnabled with 400 and does not save', () => {
+  const app = makeMockApp();
+  let saveCalled = false;
+  app.savePluginOptions = (options, cb) => { saveCalled = true; cb(null); };
+  const plugin = createPlugin(app);
+  const router = makeFakeRouter();
+  plugin.registerWithRouter(router);
+  plugin.start({ enabled: true, watchScheme: 'traditional', playbackMethod: 'webapp', muteWhenAnchoredOrMoored: true });
+
+  const res = makeFakeRes();
+  router.routes.put['/offset']({ body: { utcOffsetEnabled: 'yes' } }, res);
+
+  assert.strictEqual(res.statusCode, 400);
+  assert.strictEqual(saveCalled, false);
+
+  plugin.stop();
+});
+
+test('PUT /offset rejects an out-of-range or non-integer utcOffsetMinutes with 400 and does not save', () => {
+  const app = makeMockApp();
+  let saveCalled = false;
+  app.savePluginOptions = (options, cb) => { saveCalled = true; cb(null); };
+  const plugin = createPlugin(app);
+  const router = makeFakeRouter();
+  plugin.registerWithRouter(router);
+  plugin.start({ enabled: true, watchScheme: 'traditional', playbackMethod: 'webapp', muteWhenAnchoredOrMoored: true });
+
+  for (const bad of [-1, 241, 12.5, 'ninety']) {
+    const res = makeFakeRes();
+    router.routes.put['/offset']({ body: { utcOffsetMinutes: bad } }, res);
+    assert.strictEqual(res.statusCode, 400, `expected 400 for utcOffsetMinutes=${bad}`);
+  }
+  assert.strictEqual(saveCalled, false);
+
+  plugin.stop();
+});
+
+test('PUT /offset rejects a body with neither field, with 400', () => {
+  const app = makeMockApp();
+  const plugin = createPlugin(app);
+  const router = makeFakeRouter();
+  plugin.registerWithRouter(router);
+  plugin.start({ enabled: true, watchScheme: 'traditional', playbackMethod: 'webapp', muteWhenAnchoredOrMoored: true });
+
+  const res = makeFakeRes();
+  router.routes.put['/offset']({ body: {} }, res);
+
+  assert.strictEqual(res.statusCode, 400);
+
+  plugin.stop();
+});
+
+test('PUT /offset accepts a partial update (minutes only), persists it, and GET reflects the change', () => {
+  const app = makeMockApp();
+  const plugin = createPlugin(app);
+  const router = makeFakeRouter();
+  plugin.registerWithRouter(router);
+  plugin.start({ enabled: true, watchScheme: 'traditional', playbackMethod: 'webapp', muteWhenAnchoredOrMoored: true });
+
+  const putRes = makeFakeRes();
+  router.routes.put['/offset']({ body: { utcOffsetMinutes: 90 } }, putRes);
+  assert.strictEqual(putRes.statusCode, 200);
+  assert.deepStrictEqual(putRes.body, { utcOffsetEnabled: false, utcOffsetMinutes: 90 });
+
+  const getRes = makeFakeRes();
+  router.routes.get['/offset']({}, getRes);
+  assert.deepStrictEqual(getRes.body, { utcOffsetEnabled: false, utcOffsetMinutes: 90 });
+
+  plugin.stop();
+});
+
+test('PUT /offset accepts both fields together', () => {
+  const app = makeMockApp();
+  const plugin = createPlugin(app);
+  const router = makeFakeRouter();
+  plugin.registerWithRouter(router);
+  plugin.start({ enabled: true, watchScheme: 'traditional', playbackMethod: 'webapp', muteWhenAnchoredOrMoored: true });
+
+  const putRes = makeFakeRes();
+  router.routes.put['/offset']({ body: { utcOffsetEnabled: true, utcOffsetMinutes: 240 } }, putRes);
+  assert.strictEqual(putRes.statusCode, 200);
+  assert.deepStrictEqual(putRes.body, { utcOffsetEnabled: true, utcOffsetMinutes: 240 });
+
+  plugin.stop();
+});
+
+test('PUT /offset returns 500 if savePluginOptions fails', () => {
+  const app = makeMockApp();
+  app.savePluginOptions = (options, cb) => cb(new Error('disk full'));
+  const plugin = createPlugin(app);
+  const router = makeFakeRouter();
+  plugin.registerWithRouter(router);
+  plugin.start({ enabled: true, watchScheme: 'traditional', playbackMethod: 'webapp', muteWhenAnchoredOrMoored: true });
+
+  const res = makeFakeRes();
+  router.routes.put['/offset']({ body: { utcOffsetMinutes: 30 } }, res);
+
+  assert.strictEqual(res.statusCode, 500);
+
+  plugin.stop();
+});
+
 test('POST /test-strike does not touch server speaker when playbackMethod is webapp', () => {
   const app = makeMockApp();
   const plugin = createPlugin(app);

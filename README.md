@@ -32,6 +32,17 @@ listens for it over the SignalK websocket and plays the matching audio file.
     - *Standard* — ignores the dog-watch split as a concept and just
       cycles 1–8 every 4 hours all day, including through the second dog
       watch (18:30=5, 19:00=6, 19:30=7, 20:00=8).
+  - **Enable manual UTC time offset** / **UTC time offset (minutes)** — runs
+    the schedule against UTC-plus-this-offset (0–240 minutes) instead of the
+    server's local clock, for crews who want the bells to sound at times
+    other than their local wall clock would give. Deliberately UTC-based
+    rather than tied to the server's own timezone/DST. When enabled, the
+    Watch bell schedule setting above is forced to *Standard*, since the
+    British Navy dog-watch reset is tied to real second-dog-watch clock time,
+    which an arbitrary offset would no longer line up with. Not exposed in
+    the webapp UI, but readable/writable via `GET`/`PUT
+    /plugins/signalk-ships-bells/offset` (see below) for external
+    tooling/automation.
   - **Mute bell when at anchor or moored** — skips playback while
     `navigation.state` is `anchored` or `moored`. Requires that path to be
     populated by something on your system — see below.
@@ -72,6 +83,11 @@ listens for it over the SignalK websocket and plays the matching audio file.
   writes the setting through a small REST API exposed by the plugin
   (`GET`/`PUT /plugins/signalk-ships-bells/schedule`), so it can be changed
   without going into Server → Plugin Config.
+- **Manual UTC offset REST API** — `GET`/`PUT
+  /plugins/signalk-ships-bells/offset` reads/writes `utcOffsetEnabled` and
+  `utcOffsetMinutes` (0–240), for external tooling that wants to set the
+  offset without the admin config UI. `PUT` supports partial updates (send
+  either field, or both). Not used by the bundled webapp.
 
 ## Recommended companion plugins
 
@@ -109,7 +125,8 @@ npm test
 
 This runs Node's built-in test runner (`node --test`) over `test/*.test.js`, which
 covers the bell-schedule math for all three watch schemes, the plugin's config
-schema, its start/stop/restart lifecycle, and the `/schedule` REST endpoint.
+schema, its start/stop/restart lifecycle, and the `/schedule` and `/offset`
+REST endpoints.
 
 CI runs on every push and pull request via the reusable
 [SignalK plugin-ci workflow](https://github.com/SignalK/signalk-server/blob/master/.github/workflows/plugin-ci.yml)

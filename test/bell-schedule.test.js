@@ -6,7 +6,10 @@ const {
   parseTimeToMinutes,
   isWithinQuietHours,
   nextNewYearEveTriggerTime,
-  nightVolumeFactorForMoment
+  nightVolumeFactorForMoment,
+  minutesSinceMidnightUTC,
+  effectiveMinutesSinceMidnight,
+  effectiveWatchScheme
 } = require('../index.js');
 
 test('simple-cycle cycles 1-8 every 4 hours all day, including through the second dog watch', () => {
@@ -160,6 +163,51 @@ test('nightVolumeFactorForMoment returns level/100 within the configured overnig
   };
   assert.strictEqual(nightVolumeFactorForMoment(new Date(2026, 0, 1, 23, 0, 0), options), 0.3); // 23:00
   assert.strictEqual(nightVolumeFactorForMoment(new Date(2026, 0, 1, 3, 0, 0), options), 0.3); // 03:00
+});
+
+test('minutesSinceMidnightUTC extracts UTC hours/minutes, independent of local timezone', () => {
+  assert.strictEqual(minutesSinceMidnightUTC(new Date(Date.UTC(2026, 0, 1, 18, 30, 45))), 1110);
+  assert.strictEqual(minutesSinceMidnightUTC(new Date(Date.UTC(2026, 0, 1, 0, 0, 0))), 0);
+  assert.strictEqual(minutesSinceMidnightUTC(new Date(Date.UTC(2026, 0, 1, 23, 59, 59))), 1439);
+});
+
+test('effectiveMinutesSinceMidnight falls back to local time when the UTC offset is disabled', () => {
+  const local = new Date(2026, 0, 1, 12, 0, 0);
+  assert.strictEqual(
+    effectiveMinutesSinceMidnight(local, { utcOffsetEnabled: false }),
+    minutesSinceMidnight(local)
+  );
+});
+
+test('effectiveMinutesSinceMidnight adds the configured offset to UTC time when enabled', () => {
+  const utcNoon = new Date(Date.UTC(2026, 0, 1, 12, 0, 0));
+  assert.strictEqual(
+    effectiveMinutesSinceMidnight(utcNoon, { utcOffsetEnabled: true, utcOffsetMinutes: 90 }),
+    12 * 60 + 90
+  );
+  assert.strictEqual(
+    effectiveMinutesSinceMidnight(utcNoon, { utcOffsetEnabled: true, utcOffsetMinutes: 0 }),
+    12 * 60
+  );
+});
+
+test('effectiveMinutesSinceMidnight wraps past midnight when the offset pushes past 24:00', () => {
+  const utcLateNight = new Date(Date.UTC(2026, 0, 1, 23, 0, 0)); // 23:00 UTC
+  assert.strictEqual(
+    effectiveMinutesSinceMidnight(utcLateNight, { utcOffsetEnabled: true, utcOffsetMinutes: 240 }),
+    3 * 60 // 23:00 + 4:00 wraps to 03:00
+  );
+});
+
+test('effectiveWatchScheme forces "simple-cycle" (Standard) when the UTC offset is enabled', () => {
+  assert.strictEqual(
+    effectiveWatchScheme({ utcOffsetEnabled: true, watchScheme: 'traditional' }),
+    'simple-cycle'
+  );
+  assert.strictEqual(
+    effectiveWatchScheme({ utcOffsetEnabled: false, watchScheme: 'traditional' }),
+    'traditional'
+  );
 });
 
 test('nightVolumeFactorForMoment clamps an out-of-range level to 0-100', () => {

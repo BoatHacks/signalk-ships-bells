@@ -82,6 +82,20 @@ server-speaker strikes always play at full volume. This limitation is
 documented in the config schema description and the README; don't let anyone
 assume it's a bug.
 
+**Manual UTC offset**: `utcOffsetEnabled` + `utcOffsetMinutes` (0-240, admin
+config UI only, not exposed via the webapp or `/schedule` REST endpoint).
+When enabled, `effectiveMinutesSinceMidnight()` computes minutes-since-midnight
+from UTC (`date.getUTCHours/getUTCMinutes`) plus the offset, instead of local
+wall-clock time — deliberately independent of the server's own
+timezone/DST. `msUntilNextHalfHourBoundary()` shifts its "now" by the offset
+(in UTC) too, so the self-rescheduling timer still lands on the correct
+half-hour boundary of the *offset* clock, not the local one. `watchScheme` is
+forced to `simple-cycle` via `effectiveWatchScheme()` whenever the offset is
+enabled — the `traditional` scheme's dog-watch reset is tied to real
+second-dog-watch clock time, which an arbitrary offset would no longer line
+up with. This is a runtime override only; the stored `watchScheme` option
+itself is untouched.
+
 **Manual test button** (`POST /plugins/signalk-ships-bells/test-strike`):
 deliberately bypasses *all* muting and the night-volume reduction — a manual
 test should always be clearly audible. Also exercises whichever
@@ -95,7 +109,10 @@ was defaulting it to include `"sound"`, which wasn't wanted.
 
 **REST API** (`plugin.registerWithRouter`): `GET`/`PUT
 /plugins/signalk-ships-bells/schedule` (read/write `watchScheme` from the
-webapp, not just the admin config UI) and `POST .../test-strike` (see above).
+webapp, not just the admin config UI), `GET`/`PUT .../offset` (read/write
+`utcOffsetEnabled`/`utcOffsetMinutes`; PUT supports partial updates — either
+field or both; not used by the webapp, for external tooling), and `POST
+.../test-strike` (see above).
 
 **Testing quirks worth knowing** (both discovered the hard way):
 - `play-sound` will find and use *real* system audio players (this sandbox
@@ -113,14 +130,20 @@ webapp, not just the admin config UI) and `POST .../test-strike` (see above).
 
 ## Test suite
 
-`npm test` runs `node --test test/*.test.js`. Currently **30 tests, all
-passing**. Covers: bell-count math for both schemes, quiet-hours/night-volume
-time-range math (including midnight wraparound and invalid-input handling),
-New Year's trigger-time calculation (including year rollover and the
-long-delay chunking), plugin lifecycle (start/stop/restart), schema
-consistency (enum/enumNames stay in sync, defaults are valid), the `/schedule`
+`npm test` runs `node --test test/*.test.js`. Currently **42 tests**. Covers:
+bell-count math for both schemes, quiet-hours/night-volume time-range math
+(including midnight wraparound and invalid-input handling), the manual UTC
+offset (`effectiveMinutesSinceMidnight`, `effectiveWatchScheme`), New Year's
+trigger-time calculation (including year rollover and the long-delay
+chunking), plugin lifecycle (start/stop/restart), schema consistency
+(enum/enumNames stay in sync, defaults are valid), the `/schedule`, `/offset`,
 and `/test-strike` REST endpoints, and a mocked-timer end-to-end regression
 test for the New Year's transition.
+
+**Known flaky test**: "New Year's Eve gets an extra 8-bell strike..." in
+`test/plugin.test.js` fails intermittently depending on the date the suite is
+run — pre-existing, reproduces on a clean `main` checkout too, unrelated to
+the UTC-offset feature. Not investigated as part of this change.
 
 ## Release process (established pattern, repeat exactly)
 

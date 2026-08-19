@@ -44,6 +44,33 @@ function minutesSinceMidnight(date) {
   return date.getHours() * 60 + date.getMinutes();
 }
 
+// ---- Manual UTC offset ----------------------------------------------------
+//
+// Lets a user pin the bell schedule to UTC-plus-N-minutes instead of the
+// server's local clock (e.g. running the schedule on a different watch
+// rotation than local wall-clock time would give). Deliberately UTC-based
+// rather than local-time-based, so it isn't entangled with the server's own
+// timezone/DST handling. When enabled, the watch scheme is forced to
+// "simple-cycle" (labelled "Standard" in the schema) - the dog-watch reset
+// in "traditional" is a fixed-clock-time convention, and an arbitrary offset
+// would put it somewhere that no longer matches the real second dog watch.
+
+function minutesSinceMidnightUTC(date) {
+  return date.getUTCHours() * 60 + date.getUTCMinutes();
+}
+
+function effectiveMinutesSinceMidnight(date, options) {
+  if (!options.utcOffsetEnabled) {
+    return minutesSinceMidnight(date);
+  }
+  const offset = options.utcOffsetMinutes || 0;
+  return (minutesSinceMidnightUTC(date) + offset + 1440) % 1440;
+}
+
+function effectiveWatchScheme(options) {
+  return options.utcOffsetEnabled ? 'simple-cycle' : options.watchScheme;
+}
+
 // ---- Quiet-hours calculation --------------------------------------------
 //
 // Also pulled out to module scope so the test suite can exercise it directly.
@@ -251,7 +278,13 @@ module.exports = function (app) {
     }
   }
 
-  function msUntilNextHalfHourBoundary(now) {
+  function msUntilNextHalfHourBoundary(now, options) {
+    if (options && options.utcOffsetEnabled) {
+      const shifted = new Date(now.getTime() + (options.utcOffsetMinutes || 0) * 60 * 1000);
+      const msPastHalfHour =
+        ((shifted.getUTCMinutes() % 30) * 60 + shifted.getUTCSeconds()) * 1000 + shifted.getUTCMilliseconds();
+      return 30 * 60 * 1000 - msPastHalfHour;
+    }
     const msPastHalfHour = ((now.getMinutes() % 30) * 60 + now.getSeconds()) * 1000 + now.getMilliseconds();
     return 30 * 60 * 1000 - msPastHalfHour;
   }
@@ -275,11 +308,11 @@ module.exports = function (app) {
 
   function scheduleNextStrike(options) {
     const now = new Date();
-    const delay = msUntilNextHalfHourBoundary(now);
+    const delay = msUntilNextHalfHourBoundary(now, options);
 
     strikeTimer = setTimeout(() => {
       const t = new Date();
-      strikeBell(bellCountForMinutes(minutesSinceMidnight(t), options.watchScheme), options);
+      strikeBell(bellCountForMinutes(effectiveMinutesSinceMidnight(t, options), effectiveWatchScheme(options)), options);
       scheduleNextStrike(options);
     }, delay);
   }
@@ -320,6 +353,26 @@ module.exports = function (app) {
           'Standard (ignores the dog-watch split, just cycles 1-8 all day)'
         ],
         default: 'traditional'
+      },
+      utcOffsetEnabled: {
+        type: 'boolean',
+        title: 'Enable manual UTC time offset',
+        description:
+          "Runs the bell schedule against UTC-plus-the-offset-below instead of this " +
+          "server's local clock, for crews who want the watch bells to sound at " +
+          "different times than local wall-clock time would give. When enabled, the " +
+          "Watch bell schedule above is forced to Standard - the British Navy dog-watch " +
+          "reset is tied to real second-dog-watch clock time, which an arbitrary offset " +
+          "would no longer line up with.",
+        default: false
+      },
+      utcOffsetMinutes: {
+        type: 'integer',
+        title: 'UTC time offset (minutes)',
+        description: 'Only used when "Enable manual UTC time offset" is on, above.',
+        minimum: 0,
+        maximum: 240,
+        default: 0
       },
       playbackMethod: {
         type: 'string',
@@ -430,6 +483,60 @@ module.exports = function (app) {
       });
     });
 
+    // Read/write the manual UTC offset. Deliberately a separate endpoint from
+    // /schedule (rather than folded into it) - the webapp doesn't use this one,
+    // it's for external tooling/automation that wants to set the offset without
+    // going through the admin config UI. Supports partial updates: PUT only the
+    // field(s) you're changing.
+    router.get('/offset', (req, res) => {
+      res.json({
+        utcOffsetEnabled: !!currentOptions.utcOffsetEnabled,
+        utcOffsetMinutes: currentOptions.utcOffsetMinutes || 0
+      });
+    });
+
+    router.put('/offset', (req, res) => {
+      const body = req.body || {};
+      const { minimum, maximum } = plugin.schema.properties.utcOffsetMinutes;
+      const hasEnabled = Object.prototype.hasOwnProperty.call(body, 'utcOffsetEnabled');
+      const hasMinutes = Object.prototype.hasOwnProperty.call(body, 'utcOffsetMinutes');
+
+      if (!hasEnabled && !hasMinutes) {
+        res.status(400).json({ error: 'Body must include utcOffsetEnabled and/or utcOffsetMinutes' });
+        return;
+      }
+      if (hasEnabled && typeof body.utcOffsetEnabled !== 'boolean') {
+        res.status(400).json({ error: 'utcOffsetEnabled must be a boolean' });
+        return;
+      }
+      if (
+        hasMinutes &&
+        (!Number.isInteger(body.utcOffsetMinutes) || body.utcOffsetMinutes < minimum || body.utcOffsetMinutes > maximum)
+      ) {
+        res.status(400).json({ error: `utcOffsetMinutes must be an integer between ${minimum} and ${maximum}` });
+        return;
+      }
+
+      if (hasEnabled) {
+        currentOptions.utcOffsetEnabled = body.utcOffsetEnabled;
+      }
+      if (hasMinutes) {
+        currentOptions.utcOffsetMinutes = body.utcOffsetMinutes;
+      }
+
+      app.savePluginOptions(currentOptions, (err) => {
+        if (err) {
+          app.error(`ships-bells: failed to save offset option: ${err.message || err}`);
+          res.status(500).json({ error: 'Failed to save option' });
+          return;
+        }
+        res.json({
+          utcOffsetEnabled: !!currentOptions.utcOffsetEnabled,
+          utcOffsetMinutes: currentOptions.utcOffsetMinutes || 0
+        });
+      });
+    });
+
     // Lets the "play test bell" button in the webapp also exercise server-speaker
     // output when that's part of the configured playback method - a plain client-side
     // <audio> play() can't reach the SignalK host's own speaker, so this is the only
@@ -500,3 +607,6 @@ module.exports.parseTimeToMinutes = parseTimeToMinutes;
 module.exports.isWithinQuietHours = isWithinQuietHours;
 module.exports.nextNewYearEveTriggerTime = nextNewYearEveTriggerTime;
 module.exports.nightVolumeFactorForMoment = nightVolumeFactorForMoment;
+module.exports.minutesSinceMidnightUTC = minutesSinceMidnightUTC;
+module.exports.effectiveMinutesSinceMidnight = effectiveMinutesSinceMidnight;
+module.exports.effectiveWatchScheme = effectiveWatchScheme;
