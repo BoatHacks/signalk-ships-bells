@@ -235,6 +235,9 @@
         if (data.playedOnMopidy) {
           console.log('ships-bells: test also played on Mopidy sound server');
         }
+        if (data.playedOnAlerts) {
+          console.log('ships-bells: test also played on Alerts stream');
+        }
         if (!data.playedOnServerSpeaker && data.reason && data.reason !== 'server-speaker playback is not enabled') {
           console.warn('ships-bells: server-speaker test failed -', data.reason);
         }

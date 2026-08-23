@@ -20,13 +20,18 @@ BoatHacks/signalk-ships-bells (renamed from the singular
   to the SignalK websocket, subscribing to a strike notification, playing the
   matching audio file; volume slider and mute toggle persisted in
   localStorage.
-- Three independent playback checkboxes (`playbackWebapp`, `playbackServerSpeaker`,
-  `playbackMopidy` - any combination): server speaker shells out via
-  `play-sound`; mopidy sends the bell through a configurable Mopidy JSON-RPC
-  instance instead (for when something else, e.g. signalk-jukebox's
-  Snapclient, already holds the sound card open), ducking/resuming whatever
-  Mopidy was already playing and applying the night-volume reduction to its
-  mixer too, with an optional per-zone selection (checkboxes in the webapp, muting other
-  Snapcast zones for the strike via the Snapserver control API).
+- Four independent playback checkboxes (`playbackWebapp`,
+  `playbackServerSpeaker`, `playbackMopidy`, `playbackAlerts` - any
+  combination): server speaker shells out via `play-sound`; mopidy sends the
+  bell through a configurable Mopidy JSON-RPC instance instead (for when
+  something else, e.g. signalk-jukebox's Snapclient, already holds the sound
+  card open), ducking/resuming whatever Mopidy was already playing and
+  applying the night-volume reduction to its mixer too, with an optional
+  per-zone selection (checkboxes in the webapp, muting other Snapcast zones
+  for the strike via the Snapserver control API); alerts streams the bell
+  (resampled via ffmpeg) directly into signalk-jukebox's own "Alerts"
+  Snapcast stream instead of through Mopidy at all, heard only by zones
+  currently switched to that stream. `snapcastHost`/`snapcastControlPort`
+  are shared by the mopidy zone-muting and alerts methods.
 - Recommends `signalk-autostate` as a companion plugin (it populates
   `navigation.state`, used by the mute-at-anchor feature).

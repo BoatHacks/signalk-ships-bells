@@ -99,23 +99,26 @@ itself is untouched.
 **Manual test button** (`POST /plugins/signalk-ships-bells/test-strike`):
 deliberately bypasses *all* muting and the night-volume reduction — a manual
 test should always be clearly audible. Also exercises server-speaker and/or
-Mopidy playback for whichever of `playbackServerSpeaker`/`playbackMopidy` are
-on, not just local browser playback.
+Mopidy and/or Alerts playback for whichever of
+`playbackServerSpeaker`/`playbackMopidy`/`playbackAlerts` are on, not just
+local browser playback.
 
-**Playback outputs are three independent booleans**
-(`playbackWebapp`/`playbackServerSpeaker`/`playbackMopidy`, admin-config
-checkboxes, `playbackWebapp` defaulting `true` and the other two `false`),
-not a single-select - any combination can be on at once, e.g. webapp +
-Mopidy together. Replaced the old single `playbackMethod` enum
+**Playback outputs are four independent booleans**
+(`playbackWebapp`/`playbackServerSpeaker`/`playbackMopidy`/`playbackAlerts`,
+admin-config checkboxes, `playbackWebapp` defaulting `true` and the rest
+`false`), not a single-select - any combination can be on at once, e.g.
+webapp + Mopidy together. Replaced the old single `playbackMethod` enum
 (`'webapp'`/`'server-speaker'`/`'both'`/`'mopidy'`), which couldn't express
 "webapp AND mopidy" or "server-speaker AND mopidy". `migratePlaybackMethod()`
 runs once at `plugin.start()`: if `playbackMethod` is present and none of the
-three new keys exist yet, it derives them (`'both'` → both `playbackWebapp`
-and `playbackServerSpeaker`), deletes `playbackMethod`, and saves via
-`app.savePluginOptions` - so installs configured before this change keep
-working without the admin re-checking anything. A no-op as soon as any new
-key is present (including a deliberate `false`), and a no-op for a fresh
-install with no legacy field at all.
+(then-three) new keys exist yet, it derives them (`'both'` → both
+`playbackWebapp` and `playbackServerSpeaker`), deletes `playbackMethod`, and
+saves via `app.savePluginOptions` - so installs configured before that change
+keep working without the admin re-checking anything. `playbackAlerts` was
+added afterward and isn't part of this migration at all - it just defaults
+`false` like any other new field on an existing install. A no-op as soon as
+any new key is present (including a deliberate `false`), and a no-op for a
+fresh install with no legacy field at all.
 
 **Mopidy sound server playback** (`playbackMopidy: true`, added because a
 user's `signalk-jukebox` Snapclient was holding the sound card open, starving
@@ -167,13 +170,52 @@ was added. The manual test button bypasses this like it bypasses muting -
 `playOnMopidy(strikes, currentOptions)` is called from `/test-strike` without
 a `volumeFactor` argument, which defaults to `1` inside `playOnMopidy()`.
 
+**Alerts stream playback** (`playbackAlerts: true`, `playOnAlerts()`):
+streams the bell straight into signalk-jukebox's own "Alerts" Snapcast
+stream (its `ALERTS_STREAM_ID`/`ALERTS_PORT`, a standing TCP intake -
+signalk-jukebox project, `container.ts`), bypassing Mopidy entirely. Added
+because `playOnMopidy`'s zone muting silences the whole Snapclient, which
+also silences any announcement meant for a zone taken off the jukebox
+stream - added specifically to give those zones something to still hear.
+Only zones currently switched to `"Alerts"` in signalk-jukebox's own webapp
+actually hear it (a Snapcast group can only be assigned one stream at a
+time); this plugin doesn't do any zone-switching of its own, unlike
+`muteOtherZones` below - a real, scoped-out follow-up if wanted later.
+
+The bundled bell `.wav` files are `44100:16:2` (Benboncan/Freesound's own
+format); signalk-jukebox's Alerts stream is fixed at `48000:16:2` (its own
+`snapserver.conf.template`) - Snapcast's `tcp server` source type doesn't
+resample, confirmed by build-testing. `playOnAlerts()` spawns `ffmpeg -i
+<bellFilePath> -ar 48000 -ac 2 -sample_fmt s16 -f wav -` and pipes its
+stdout directly into the socket (`ffmpeg.stdout.pipe(socket)`) - no temp
+file. Confirmed end-to-end against a real signalk-jukebox instance: a real
+`bell-strikes-8.wav` streamed through this exact invocation played for its
+full, correct 12.78s (Snapserver's own `PcmStream` state transitions,
+`idle → playing → idle`, matched that duration precisely). Requires ffmpeg
+installed on this machine - same kind of external-binary requirement as
+server-speaker's play-sound/mpg123/aplay. No duck/resume needed here (unlike
+`playOnMopidy`): the Alerts stream is entirely separate from whatever's
+playing on the jukebox stream, so this never interrupts anything.
+
+`snapcastHost` (new, shared by both `playOnMopidy`'s zone muting below and
+this) replaces what used to be an implicit reuse of `mopidyHost` for the
+Snapcast control connection - Mopidy and Snapserver are the same host in a
+default signalk-jukebox install (this field's own default, `localhost`),
+but aren't necessarily the same host in general, e.g. someone running
+Snapserver on separate hardware. `alertsStreamName` (default `'Alerts'`)
+has no effect on the connection itself - Snapcast identifies a `tcp server`
+stream by which port you connect to, not a name sent over the wire - it's
+purely for this plugin's own log messages if the admin ever renames or
+rebuilds their own Alerts-equivalent stream.
+
 **Per-zone targeting** (`mopidyZoneIds`, `GET`/`PUT
 .../mopidy-zones`): Mopidy has one shared stream reaching every Snapcast
 zone equally, so "play in zone A only" means muting every *other* zone via
 Snapserver's own raw-TCP JSON-RPC control API (`snapserverCall()` —
 newline-delimited over `net.createConnection`, NOT HTTP, same protocol as
-signalk-jukebox's own `snapserver-client.ts`) at `snapcastControlPort`
-(default `1705`), then restoring each excluded zone's own prior mute state
+signalk-jukebox's own `snapserver-client.ts`) at `snapcastHost`/
+`snapcastControlPort` (default `1705`), then restoring each excluded zone's
+own prior mute state
 afterward (`muteOtherZones`/`restoreZones` snapshot `wasMuted` per client
 before touching it, so a zone already muted by the admin stays muted). The
 restore is scheduled via `setTimeout(..., durationMs + 500)`, `durationMs`
@@ -217,7 +259,7 @@ zone list for the webapp), and `GET`/`PUT .../mopidy-zones` (read/write
 
 ## Test suite
 
-`npm test` runs `node --test test/*.test.js`. Currently **51 tests**. Covers:
+`npm test` runs `node --test test/*.test.js`. Currently **55 tests**. Covers:
 bell-count math for both schemes, quiet-hours/night-volume time-range math
 (including midnight wraparound and invalid-input handling), the manual UTC
 offset (`effectiveMinutesSinceMidnight`, `effectiveWatchScheme`), New Year's
@@ -234,10 +276,15 @@ hooks, mirroring the pre-existing `_setAudioPlayerForTesting`),
 `migratePlaybackMethod()` for all four legacy `playbackMethod` values plus
 the fresh-install no-op case, that `playbackWebapp`+`playbackMopidy` can both
 fire from one strike, and that Mopidy's mixer volume is ducked/restored
-during the configured night-volume-reduction hours. **Not yet covered**: the
-actual zone-muting/restore path (`muteOtherZones`/`restoreZones` with a
-non-empty `mopidyZoneIds`) — worth adding via `_setSnapConnectForTesting`
-before relying on it further.
+during the configured night-volume-reduction hours. Also covers Alerts
+playback (`_setSpawnForTesting`/`_setAlertsConnectForTesting`): the ffmpeg
+resampling args and the bytes piped into the Alerts connection, configured
+`snapcastHost`/`alertsPort`, and a failed ffmpeg spawn logged via
+`app.error` rather than thrown; and that `snapcastHost` (not `mopidyHost`)
+is what `muteOtherZones` actually connects to, using a fake
+`net.createConnection`-shaped socket (`makeFakeSnapSocket()`) that answers
+`Server.GetStatus`/`Client.SetVolume` over the same raw newline-JSON wire
+format the real code speaks.
 
 **Known flaky test**: "New Year's Eve gets an extra 8-bell strike..." in
 `test/plugin.test.js` fails intermittently depending on the date the suite is

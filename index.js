@@ -1,5 +1,6 @@
 const path = require('path');
 const net = require('net');
+const { spawn } = require('child_process');
 
 // ---- Bell-count calculation --------------------------------------------
 //
@@ -175,6 +176,8 @@ module.exports = function (app) {
   let currentOptions = {};
   let fetchImpl = fetch;
   let snapConnectImpl = net.createConnection.bind(net);
+  let alertsConnectImpl = net.createConnection.bind(net);
+  let spawnImpl = spawn;
 
   // Lazily require play-sound so the plugin still loads (and its config UI still
   // works) on systems where that optional dependency isn't installed, unless
@@ -236,6 +239,20 @@ module.exports = function (app) {
   // the real one, so tests don't make real TCP connections to a Snapserver.
   plugin._setSnapConnectForTesting = function (fakeConnect) {
     snapConnectImpl = fakeConnect;
+  };
+
+  // Test-only hook: a separate connect function from snapConnectImpl above -
+  // that one is for Snapserver's own control-port JSON-RPC, this one is for
+  // signalk-jukebox's Alerts stream (raw audio bytes, unrelated protocol) -
+  // so tests can fake each independently.
+  plugin._setAlertsConnectForTesting = function (fakeConnect) {
+    alertsConnectImpl = fakeConnect;
+  };
+
+  // Test-only hook: lets the test suite inject a fake child_process.spawn
+  // instead of the real one, so tests don't shell out to a real ffmpeg.
+  plugin._setSpawnForTesting = function (fakeSpawn) {
+    spawnImpl = fakeSpawn;
   };
 
   // ---- Mopidy sound server playback ----------------------------------------
@@ -449,6 +466,7 @@ module.exports = function (app) {
   function playOnMopidy(strikes, options, volumeFactor) {
     const host = options.mopidyHost || 'localhost';
     const port = options.mopidyPort || 6680;
+    const snapHost = options.snapcastHost || 'localhost';
     const snapPort = options.snapcastControlPort || 1705;
     const zoneIds = Array.isArray(options.mopidyZoneIds) ? options.mopidyZoneIds : [];
     const factor = typeof volumeFactor === 'number' ? volumeFactor : 1;
@@ -458,7 +476,7 @@ module.exports = function (app) {
       let zoneSnapshot = [];
       if (zoneIds.length > 0) {
         try {
-          zoneSnapshot = await muteOtherZones(host, snapPort, zoneIds);
+          zoneSnapshot = await muteOtherZones(snapHost, snapPort, zoneIds);
         } catch (err) {
           app.error(`ships-bells: could not mute other zones: ${err.message || err}`);
         }
@@ -486,7 +504,7 @@ module.exports = function (app) {
             app.error(`ships-bells: could not resume mopidy playback after bell: ${err.message || err}`);
           }).finally(() => {
             if (zoneSnapshot.length > 0) {
-              restoreZones(host, snapPort, zoneSnapshot).catch((err) => {
+              restoreZones(snapHost, snapPort, zoneSnapshot).catch((err) => {
                 app.error(`ships-bells: could not restore zone mute state: ${err.message || err}`);
               });
             }
@@ -497,10 +515,76 @@ module.exports = function (app) {
         unduckAfterBell(host, port, playbackSnapshot).catch(() => {});
         restoreVolumeAfterBell(host, port, originalVolume).catch(() => {});
         if (zoneSnapshot.length > 0) {
-          restoreZones(host, snapPort, zoneSnapshot).catch(() => {});
+          restoreZones(snapHost, snapPort, zoneSnapshot).catch(() => {});
         }
       }
     })();
+
+    return true;
+  }
+
+  // ---- Alerts stream playback (signalk-jukebox's Snapcast intake) ---------
+  //
+  // Streams the bell straight into signalk-jukebox's "Alerts" Snapcast
+  // stream (a standing TCP intake, ALERTS_STREAM_ID in signalk-jukebox's own
+  // container.ts) instead of going through Mopidy at all. Whichever zones
+  // are currently switched to "Alerts" (signalk-jukebox's own webapp "Play
+  // here" toggle) hear it - zones still on "jukebox" don't, since a
+  // Snapcast group can only be assigned to one stream at a time. Unlike
+  // playOnMopidy, there's nothing to duck/resume here: the Alerts stream is
+  // entirely separate from whatever's playing on the jukebox stream, so
+  // this never interrupts anything.
+  //
+  // The bundled bell .wav files are 44100:16:2 (Benboncan/Freesound's own
+  // format); signalk-jukebox's Alerts stream is fixed at 48000:16:2 (its
+  // own snapserver.conf.template) - Snapcast's tcp-server source doesn't
+  // resample, it expects the connecting sender to already send audio
+  // matching that format. Resampled on the fly via ffmpeg (confirmed by
+  // build-testing against a real signalk-jukebox instance: a real bell
+  // strike streamed through this exact ffmpeg invocation played for its
+  // full, correct 12.78s), piped directly into the socket - no temp file.
+  // Requires ffmpeg installed on this machine, same kind of external-binary
+  // requirement as the server-speaker method's play-sound/mpg123/aplay.
+  //
+  // snapcastHost is shared with playOnMopidy's own zone-muting (both talk
+  // to the same Snapserver instance) rather than reusing mopidyHost -
+  // Mopidy and Snapserver are the same host in a default signalk-jukebox
+  // install (this field's default), but aren't necessarily the same host
+  // in general. alertsStreamName has no effect on the connection itself
+  // (Snapcast identifies the stream by which port you connect to, not a
+  // name sent over the wire) - it's for the admin's own reference, so a
+  // renamed or custom-built Alerts-equivalent stream is still visible in
+  // logs.
+
+  function playOnAlerts(strikes, options) {
+    const host = options.snapcastHost || 'localhost';
+    const port = options.alertsPort || 4953;
+    const streamName = options.alertsStreamName || 'Alerts';
+
+    app.debug(`ships-bells: streaming into Snapcast stream "${streamName}" at ${host}:${port}`);
+    const socket = alertsConnectImpl(port, host);
+    const ffmpeg = spawnImpl('ffmpeg', [
+      '-i', bellFilePath(strikes),
+      '-ar', '48000',
+      '-ac', '2',
+      '-sample_fmt', 's16',
+      '-f', 'wav',
+      '-'
+    ]);
+
+    ffmpeg.on('error', (err) => {
+      app.error(
+        `ships-bells: could not start ffmpeg for alerts playback (${err.message}) - ` +
+        "the 'Play via Alerts stream' method needs ffmpeg installed on this machine."
+      );
+      socket.destroy();
+    });
+    socket.on('error', (err) => {
+      app.error(`ships-bells: alerts stream connection failed: ${err.message || err}`);
+      ffmpeg.kill();
+    });
+
+    ffmpeg.stdout.pipe(socket);
 
     return true;
   }
@@ -530,9 +614,10 @@ module.exports = function (app) {
     const webapp = options.playbackWebapp !== undefined ? !!options.playbackWebapp : true;
     const serverSpeaker = !!options.playbackServerSpeaker;
     const mopidy = !!options.playbackMopidy;
+    const alerts = !!options.playbackAlerts;
     app.debug(
       `ships-bells: striking ${strikes} bell(s), file ${bellFile(strikes)}, ` +
-      `webapp=${webapp}, serverSpeaker=${serverSpeaker}, mopidy=${mopidy}`
+      `webapp=${webapp}, serverSpeaker=${serverSpeaker}, mopidy=${mopidy}, alerts=${alerts}`
     );
 
     const volumeFactor = nightVolumeFactorForMoment(new Date(), options);
@@ -567,6 +652,10 @@ module.exports = function (app) {
 
     if (mopidy) {
       playOnMopidy(strikes, options, volumeFactor);
+    }
+
+    if (alerts) {
+      playOnAlerts(strikes, options);
     }
   }
 
@@ -728,17 +817,63 @@ module.exports = function (app) {
           "Signal K server's real LAN IP.",
         default: ''
       },
+      snapcastHost: {
+        type: 'string',
+        title: 'Snapcast host',
+        description:
+          "Where this plugin reaches Snapserver directly (not through Mopidy) - " +
+          "used for zone muting during Mopidy playback (below) and for the Alerts " +
+          "stream connection (further below). Default matches a default " +
+          "signalk-jukebox install, where Mopidy and Snapserver run in the same " +
+          "container; set this separately if Snapserver runs elsewhere.",
+        default: 'localhost'
+      },
       snapcastControlPort: {
         type: 'integer',
         title: 'Snapcast control port',
         description:
           "Only used when 'Play via Mopidy sound server' above is checked and one or " +
           "more zones are selected in this plugin's own webapp (\"play bells in " +
-          "<zone>\" checkboxes) - reached at the same host as Mopidy host above. " +
-          "Default (1705) matches signalk-jukebox's SNAPCAST_CONTROL_PORT. Used to " +
-          "mute every zone except the selected ones for the strike, then restore " +
-          "each one's own prior mute state afterward.",
+          "<zone>\" checkboxes) - reached at Snapcast host above. Default (1705) " +
+          "matches signalk-jukebox's SNAPCAST_CONTROL_PORT. Used to mute every zone " +
+          "except the selected ones for the strike, then restore each one's own " +
+          "prior mute state afterward.",
         default: 1705
+      },
+      playbackAlerts: {
+        type: 'boolean',
+        title: 'Play via Alerts stream (signalk-jukebox)',
+        description:
+          "Streams the bell directly into signalk-jukebox's \"Alerts\" Snapcast " +
+          "stream, bypassing Mopidy entirely. Only zones currently switched to " +
+          "\"Alerts\" in signalk-jukebox's own webapp hear it - zones still on " +
+          "\"jukebox\" don't, since a Snapcast zone can only be on one stream at a " +
+          "time. Unlike Mopidy playback above, this never interrupts anything: the " +
+          "Alerts stream is entirely separate from whatever's playing on the " +
+          "jukebox stream. Requires ffmpeg installed on this machine, to resample " +
+          "the bundled bell files (44100:16:2) to the Alerts stream's fixed format " +
+          "(48000:16:2) - Snapcast's own intake doesn't resample.",
+        default: false
+      },
+      alertsPort: {
+        type: 'integer',
+        title: 'Alerts stream port',
+        description:
+          "Only used when 'Play via Alerts stream' above is checked - reached at " +
+          "Snapcast host above. Default (4953) matches signalk-jukebox's " +
+          "ALERTS_PORT.",
+        default: 4953
+      },
+      alertsStreamName: {
+        type: 'string',
+        title: 'Alerts stream name',
+        description:
+          "Only used when 'Play via Alerts stream' above is checked. Doesn't " +
+          "affect the connection itself (Snapcast identifies the stream by which " +
+          "port you connect to, not a name sent over the wire) - shown in this " +
+          "plugin's own log messages, so change it to match signalk-jukebox if its " +
+          "Alerts-equivalent stream was ever renamed or custom-built.",
+        default: 'Alerts'
       },
       muteWhenAnchoredOrMoored: {
         type: 'boolean',
@@ -941,15 +1076,20 @@ module.exports = function (app) {
       const strikes = 8;
       const serverSpeaker = !!currentOptions.playbackServerSpeaker;
       const mopidy = !!currentOptions.playbackMopidy;
+      const alerts = !!currentOptions.playbackAlerts;
 
       if (mopidy) {
         playOnMopidy(strikes, currentOptions);
+      }
+      if (alerts) {
+        playOnAlerts(strikes, currentOptions);
       }
 
       if (!serverSpeaker) {
         res.json({
           playedOnServerSpeaker: false,
           playedOnMopidy: mopidy,
+          playedOnAlerts: alerts,
           reason: 'server-speaker playback is not enabled'
         });
         return;
@@ -959,6 +1099,7 @@ module.exports = function (app) {
       res.json({
         playedOnServerSpeaker: played,
         playedOnMopidy: mopidy,
+        playedOnAlerts: alerts,
         reason: played ? undefined : 'play-sound unavailable - check server logs'
       });
     });

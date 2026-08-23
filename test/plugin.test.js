@@ -1,5 +1,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
+const { EventEmitter } = require('node:events');
+const { PassThrough } = require('node:stream');
 const createPlugin = require('../index.js');
 
 function makeMockApp(overrides) {
@@ -74,6 +76,7 @@ test('schema enum/enumNames stay in sync and defaults are valid members', () => 
   assert.strictEqual(props.playbackWebapp.default, true);
   assert.strictEqual(props.playbackServerSpeaker.default, false);
   assert.strictEqual(props.playbackMopidy.default, false);
+  assert.strictEqual(props.playbackAlerts.default, false);
 });
 
 test('start()/stop() do not throw when enabled, and stop() clears its timers', () => {
@@ -654,6 +657,200 @@ test('mopidy playback reduces bell volume via the mixer during the configured ni
   assert.strictEqual(fakeFetch.calls[5].body.method, 'core.tracklist.remove');
   assert.strictEqual(fakeFetch.calls[6].body.method, 'core.mixer.set_volume');
   assert.deepStrictEqual(fakeFetch.calls[6].body.params, { volume: 80 });
+
+  plugin.stop();
+});
+
+function makeFakeSpawn(options) {
+  const calls = [];
+  const fakeSpawn = (cmd, args) => {
+    calls.push({ cmd, args });
+    const proc = new EventEmitter();
+    proc.stdout = new PassThrough();
+    setImmediate(() => {
+      if (options && options.emitError) {
+        proc.emit('error', new Error(options.emitError));
+      } else {
+        proc.stdout.end('fake-wav-bytes');
+      }
+    });
+    return proc;
+  };
+  fakeSpawn.calls = calls;
+  return fakeSpawn;
+}
+
+function makeFakeAlertsSocket() {
+  const socket = new EventEmitter();
+  socket.written = [];
+  socket.destroyed = false;
+  socket.write = (chunk) => {
+    socket.written.push(chunk);
+    return true;
+  };
+  socket.end = () => {};
+  socket.destroy = () => {
+    socket.destroyed = true;
+  };
+  return socket;
+}
+
+test('POST /test-strike with playbackAlerts resamples the bell via ffmpeg and streams it into the Alerts connection', async () => {
+  const app = makeMockApp();
+  const plugin = createPlugin(app);
+  const router = makeFakeRouter();
+  plugin.registerWithRouter(router);
+
+  const fakeSpawn = makeFakeSpawn();
+  const socket = makeFakeAlertsSocket();
+  const connectCalls = [];
+  plugin._setSpawnForTesting(fakeSpawn);
+  plugin._setAlertsConnectForTesting((port, host) => {
+    connectCalls.push({ port, host });
+    return socket;
+  });
+  plugin.start({ enabled: true, watchScheme: 'traditional', playbackAlerts: true, muteWhenAnchoredOrMoored: true });
+
+  const res = makeFakeRes();
+  router.routes.post['/test-strike']({}, res);
+  await flushMicrotasks();
+
+  assert.strictEqual(res.body.playedOnAlerts, true);
+  assert.strictEqual(connectCalls.length, 1);
+  assert.strictEqual(connectCalls[0].port, 4953);
+  assert.strictEqual(connectCalls[0].host, 'localhost');
+  assert.strictEqual(fakeSpawn.calls.length, 1);
+  assert.strictEqual(fakeSpawn.calls[0].cmd, 'ffmpeg');
+  const args = fakeSpawn.calls[0].args;
+  assert.ok(args.includes('-ar'));
+  assert.strictEqual(args[args.indexOf('-ar') + 1], '48000');
+  assert.ok(args.includes('-ac'));
+  assert.strictEqual(args[args.indexOf('-ac') + 1], '2');
+  assert.ok(args.some((a) => a.endsWith('bell-strikes-8.wav')));
+
+  await flushMicrotasks();
+  assert.strictEqual(Buffer.concat(socket.written).toString(), 'fake-wav-bytes');
+
+  plugin.stop();
+});
+
+test('alerts playback uses configured snapcastHost/alertsPort', async () => {
+  const app = makeMockApp();
+  const plugin = createPlugin(app);
+  const router = makeFakeRouter();
+  plugin.registerWithRouter(router);
+
+  const fakeSpawn = makeFakeSpawn();
+  const socket = makeFakeAlertsSocket();
+  const connectCalls = [];
+  plugin._setSpawnForTesting(fakeSpawn);
+  plugin._setAlertsConnectForTesting((port, host) => {
+    connectCalls.push({ port, host });
+    return socket;
+  });
+  plugin.start({
+    enabled: true,
+    watchScheme: 'traditional',
+    playbackAlerts: true,
+    snapcastHost: '192.168.1.50',
+    alertsPort: 9999,
+    muteWhenAnchoredOrMoored: true
+  });
+
+  router.routes.post['/test-strike']({}, makeFakeRes());
+  await flushMicrotasks();
+
+  assert.strictEqual(connectCalls[0].host, '192.168.1.50');
+  assert.strictEqual(connectCalls[0].port, 9999);
+
+  plugin.stop();
+});
+
+test('a failed ffmpeg spawn for alerts playback is logged via app.error, not thrown', async () => {
+  const app = makeMockApp();
+  const plugin = createPlugin(app);
+  const router = makeFakeRouter();
+  plugin.registerWithRouter(router);
+
+  const fakeSpawn = makeFakeSpawn({ emitError: 'spawn ffmpeg ENOENT' });
+  const socket = makeFakeAlertsSocket();
+  plugin._setSpawnForTesting(fakeSpawn);
+  plugin._setAlertsConnectForTesting(() => socket);
+  plugin.start({ enabled: true, watchScheme: 'traditional', playbackAlerts: true, muteWhenAnchoredOrMoored: true });
+
+  router.routes.post['/test-strike']({}, makeFakeRes());
+  await flushMicrotasks();
+
+  assert.ok(app._errorLog.some((msg) => msg.includes('spawn ffmpeg ENOENT')));
+  assert.strictEqual(socket.destroyed, true);
+
+  plugin.stop();
+});
+
+function makeFakeSnapSocket(responder) {
+  const socket = new EventEmitter();
+  socket.setEncoding = () => {};
+  socket.write = (line) => {
+    const msg = JSON.parse(line);
+    const result = responder(msg.method, msg.params);
+    setImmediate(() => {
+      socket.emit('data', `${JSON.stringify({ id: msg.id, jsonrpc: '2.0', result })}\n`);
+    });
+  };
+  socket.end = () => {};
+  setImmediate(() => socket.emit('connect'));
+  return socket;
+}
+
+test('mopidy zone muting reaches Snapcast at the configured snapcastHost, independent of mopidyHost', async () => {
+  const app = makeMockApp();
+  const plugin = createPlugin(app);
+  const router = makeFakeRouter();
+  plugin.registerWithRouter(router);
+
+  const fakeFetch = makeFakeFetch([{ result: 'stopped' }, { result: [] }, { result: null }]);
+  plugin._setFetchForTesting(fakeFetch);
+
+  const snapConnectCalls = [];
+  const responder = (method) => {
+    if (method === 'Server.GetStatus') {
+      return {
+        server: {
+          groups: [
+            {
+              clients: [
+                { id: 'zone-1', config: { volume: { percent: 50, muted: false } } },
+                { id: 'zone-2', config: { volume: { percent: 70, muted: false } } }
+              ]
+            }
+          ]
+        }
+      };
+    }
+    return null;
+  };
+  plugin._setSnapConnectForTesting((port, host) => {
+    snapConnectCalls.push({ port, host });
+    return makeFakeSnapSocket(responder);
+  });
+
+  plugin.start({
+    enabled: true,
+    watchScheme: 'traditional',
+    playbackMopidy: true,
+    mopidyHost: 'mopidy.example.internal',
+    snapcastHost: 'snapcast.example.internal',
+    mopidyZoneIds: ['zone-1'],
+    muteWhenAnchoredOrMoored: true
+  });
+
+  router.routes.post['/test-strike']({}, makeFakeRes());
+  await flushMicrotasks();
+  await flushMicrotasks();
+
+  assert.ok(snapConnectCalls.length > 0);
+  assert.ok(snapConnectCalls.every((c) => c.host === 'snapcast.example.internal'));
+  assert.ok(fakeFetch.calls.every((c) => c.url.startsWith('http://mopidy.example.internal:')));
 
   plugin.stop();
 });

@@ -58,7 +58,7 @@ listens for it over the SignalK websocket and plays the matching audio file.
     mixer volume, restored to whatever it was afterward); server-speaker
     playback via `play-sound` doesn't offer a portable way to control output
     volume, so it always plays at full volume regardless of this setting.
-  - **Playback outputs** — three independent checkboxes, any combination of
+  - **Playback outputs** — four independent checkboxes, any combination of
     which can be on at once:
     - *Play in web player* (on by default) — each strike is sent as a
       `notifications.plugins.signalkShipsBell.strike` delta. The bundled
@@ -97,9 +97,7 @@ listens for it over the SignalK websocket and plays the matching audio file.
       and a container without host networking can't reach this host's own
       loopback address — leave it blank to try `localhost:<this Signal K
       server's port>` (works only with host networking), or set it to this
-      Signal K server's real LAN IP otherwise. A fourth (**Snapcast control
-      port**, default `1705`, signalk-jukebox's own control port) is only
-      used together with the per-zone selection below. If Mopidy is already
+      Signal K server's real LAN IP otherwise. If Mopidy is already
       playing something, it's paused for the strike (and its volume lowered
       first, if within the reduced-volume range above) and resumed at the
       same position and volume afterward, rather than losing its place.
@@ -110,9 +108,31 @@ listens for it over the SignalK websocket and plays the matching audio file.
       field). Leaving every checkbox unselected plays the bell in every zone
       connected to Mopidy's shared stream, same as before this list existed.
       Selecting one or more zones mutes every *other* zone for the strike's
-      duration (via the Snapcast control port above), then restores each
-      one's own prior mute state afterward — a zone you'd already muted by
-      hand stays muted.
+      duration (via the Snapcast control port, see **Snapcast host**/**Snapcast
+      control port** below), then restores each one's own prior mute state
+      afterward — a zone you'd already muted by hand stays muted.
+    - *Play via Alerts stream (signalk-jukebox)* — streams the bell directly
+      into signalk-jukebox's own "Alerts" Snapcast stream, bypassing Mopidy
+      entirely. Only zones currently switched to "Alerts" in signalk-jukebox's
+      own webapp hear it; zones still on "jukebox" don't, since a Snapcast
+      zone can only be on one stream at a time. Unlike Mopidy playback above,
+      this never interrupts anything — the Alerts stream is entirely separate
+      from whatever's playing on the jukebox stream. Requires
+      [ffmpeg](https://ffmpeg.org/) installed on this machine, to resample the
+      bundled bell files (44100Hz) to the Alerts stream's fixed format
+      (48000Hz) — confirmed by build-testing that Snapcast's own intake
+      doesn't resample, and that a real bell strike streamed through this
+      exact conversion played for its full, correct length. Two config
+      fields: **Alerts stream port** (default `4953`, signalk-jukebox's own
+      `ALERTS_PORT`) and **Alerts stream name** (default `Alerts`, purely for
+      this plugin's own log messages — doesn't affect the connection itself).
+    - **Snapcast host** (default `localhost`) and **Snapcast control port**
+      (default `1705`, signalk-jukebox's own `SNAPCAST_CONTROL_PORT`) — where
+      this plugin reaches Snapserver directly, shared by the Mopidy method's
+      per-zone muting above and the Alerts stream method above. Defaults
+      match a default signalk-jukebox install, where Mopidy and Snapserver
+      run in the same container; set the host separately if Snapserver runs
+      elsewhere.
 
     Installs configured before this became three checkboxes (the old
     single-select `webapp`/`server speaker`/`both`/`mopidy` field) migrate
