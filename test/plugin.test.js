@@ -388,3 +388,101 @@ test("New Year's Eve gets an extra 8-bell strike at 23:59:47, independent of and
 
   plugin.stop();
 });
+
+function makeFakeFetch(responses) {
+  const calls = [];
+  const fetchImpl = (url, init) => {
+    calls.push({ url, body: JSON.parse(init.body) });
+    const response = responses.shift() || { result: null };
+    return Promise.resolve({ json: () => Promise.resolve(response) });
+  };
+  fetchImpl.calls = calls;
+  return fetchImpl;
+}
+
+function flushMicrotasks() {
+  return new Promise((resolve) => setImmediate(resolve));
+}
+
+test('POST /test-strike with playbackMethod mopidy sends tracklist.clear, tracklist.add, playback.play in order', async () => {
+  const app = makeMockApp();
+  const plugin = createPlugin(app);
+  const router = makeFakeRouter();
+  plugin.registerWithRouter(router);
+  const fakeFetch = makeFakeFetch([{ result: null }, { result: [] }, { result: null }]);
+  plugin._setFetchForTesting(fakeFetch);
+  plugin.start({ enabled: true, watchScheme: 'traditional', playbackMethod: 'mopidy', muteWhenAnchoredOrMoored: true });
+
+  const res = makeFakeRes();
+  router.routes.post['/test-strike']({}, res);
+  await flushMicrotasks();
+
+  assert.strictEqual(res.body.playedOnMopidy, true);
+  assert.strictEqual(fakeFetch.calls.length, 3);
+  assert.strictEqual(fakeFetch.calls[0].url, 'http://localhost:6680/mopidy/rpc');
+  assert.strictEqual(fakeFetch.calls[0].body.method, 'core.tracklist.clear');
+  assert.strictEqual(fakeFetch.calls[1].body.method, 'core.tracklist.add');
+  assert.deepStrictEqual(fakeFetch.calls[1].body.params.uris, ['http://localhost:3000/signalk-ships-bells/bells/bell-strikes-8.wav']);
+  assert.strictEqual(fakeFetch.calls[2].body.method, 'core.playback.play');
+
+  plugin.stop();
+});
+
+test('mopidy playback uses configured mopidyHost/mopidyPort and mopidyAudioBaseUrl', async () => {
+  const app = makeMockApp();
+  const plugin = createPlugin(app);
+  const router = makeFakeRouter();
+  plugin.registerWithRouter(router);
+  const fakeFetch = makeFakeFetch([{ result: null }, { result: [] }, { result: null }]);
+  plugin._setFetchForTesting(fakeFetch);
+  plugin.start({
+    enabled: true,
+    watchScheme: 'traditional',
+    playbackMethod: 'mopidy',
+    mopidyHost: '192.168.1.50',
+    mopidyPort: 7000,
+    mopidyAudioBaseUrl: 'http://192.168.1.50:3000/',
+    muteWhenAnchoredOrMoored: true
+  });
+
+  router.routes.post['/test-strike']({}, makeFakeRes());
+  await flushMicrotasks();
+
+  assert.strictEqual(fakeFetch.calls[0].url, 'http://192.168.1.50:7000/mopidy/rpc');
+  assert.deepStrictEqual(fakeFetch.calls[1].body.params.uris, ['http://192.168.1.50:3000/signalk-ships-bells/bells/bell-strikes-8.wav']);
+
+  plugin.stop();
+});
+
+test('mopidy audio base URL defaults from app.config.settings.port when unset', async () => {
+  const app = makeMockApp({ config: { settings: { port: 4000 } } });
+  const plugin = createPlugin(app);
+  const router = makeFakeRouter();
+  plugin.registerWithRouter(router);
+  const fakeFetch = makeFakeFetch([{ result: null }, { result: [] }, { result: null }]);
+  plugin._setFetchForTesting(fakeFetch);
+  plugin.start({ enabled: true, watchScheme: 'traditional', playbackMethod: 'mopidy', muteWhenAnchoredOrMoored: true });
+
+  router.routes.post['/test-strike']({}, makeFakeRes());
+  await flushMicrotasks();
+
+  assert.deepStrictEqual(fakeFetch.calls[1].body.params.uris, ['http://localhost:4000/signalk-ships-bells/bells/bell-strikes-8.wav']);
+
+  plugin.stop();
+});
+
+test('mopidy RPC failure is logged via app.error, not thrown', async () => {
+  const app = makeMockApp();
+  const plugin = createPlugin(app);
+  const router = makeFakeRouter();
+  plugin.registerWithRouter(router);
+  plugin._setFetchForTesting(() => Promise.resolve({ json: () => Promise.resolve({ error: { message: 'connection refused' } }) }));
+  plugin.start({ enabled: true, watchScheme: 'traditional', playbackMethod: 'mopidy', muteWhenAnchoredOrMoored: true });
+
+  router.routes.post['/test-strike']({}, makeFakeRes());
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.ok(app._errorLog.some((msg) => msg.includes('connection refused')));
+
+  plugin.stop();
+});

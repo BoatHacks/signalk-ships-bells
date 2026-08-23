@@ -111,6 +111,35 @@
       font-size: 0.8rem;
       color: #b9c3d9;
     }
+    #mopidy-zones-control {
+      margin: 1rem 0;
+      background: var(--navy-light);
+      padding: 0.75rem 1rem;
+      border-radius: 8px;
+      display: none;
+    }
+    #mopidy-zones-control legend {
+      font-size: 0.9rem;
+      color: #b9c3d9;
+      padding: 0;
+    }
+    #mopidy-zones-list {
+      display: flex;
+      flex-direction: column;
+      gap: 0.4rem;
+      margin-top: 0.5rem;
+    }
+    #mopidy-zones-list label {
+      font-size: 0.9rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    #mopidy-zones-status {
+      font-size: 0.8rem;
+      color: #b9c3d9;
+      margin-top: 0.4rem;
+    }
   </style>
 </head>
 <body>
@@ -129,6 +158,11 @@
     </select>
     <span id="schedule-status"></span>
   </div>
+  <fieldset id="mopidy-zones-control">
+    <legend>Play bells in (Mopidy sound server playback method only; none selected = every zone)</legend>
+    <div id="mopidy-zones-list"></div>
+    <div id="mopidy-zones-status"></div>
+  </fieldset>
   <button id="test-button">Play test bell (8 bells)</button>
   <audio id="bell-audio"></audio>
   <script src="app.js"></script>

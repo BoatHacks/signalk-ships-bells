@@ -1,4 +1,5 @@
 const path = require('path');
+const net = require('net');
 
 // ---- Bell-count calculation --------------------------------------------
 //
@@ -172,6 +173,8 @@ module.exports = function (app) {
   let audioPlayer;
   let audioPlayerLoadFailed = false;
   let currentOptions = {};
+  let fetchImpl = fetch;
+  let snapConnectImpl = net.createConnection.bind(net);
 
   // Lazily require play-sound so the plugin still loads (and its config UI still
   // works) on systems where that optional dependency isn't installed, unless
@@ -222,6 +225,214 @@ module.exports = function (app) {
     audioPlayer = fakePlayer;
     audioPlayerLoadFailed = false;
   };
+
+  // Test-only hook: lets the test suite inject a fake fetch instead of the
+  // real one, so tests don't make real HTTP calls to a Mopidy instance.
+  plugin._setFetchForTesting = function (fakeFetch) {
+    fetchImpl = fakeFetch;
+  };
+
+  // Test-only hook: lets the test suite inject a fake net.connect instead of
+  // the real one, so tests don't make real TCP connections to a Snapserver.
+  plugin._setSnapConnectForTesting = function (fakeConnect) {
+    snapConnectImpl = fakeConnect;
+  };
+
+  // ---- Mopidy sound server playback ----------------------------------------
+  //
+  // Plays the bell through a Mopidy instance instead of a speaker wired
+  // directly to the SignalK host - for setups (e.g. signalk-jukebox) where the
+  // host's own sound card is already claimed by a Snapcast client and
+  // server-speaker playback (which opens the ALSA device directly via
+  // play-sound) would fight it for the device. Mopidy runs in a container in
+  // the signalk-jukebox case, so it can't read this plugin's bell .wav files
+  // off local disk - it fetches them over HTTP instead, from wherever this
+  // plugin's own webapp already serves them
+  // (/signalk-ships-bells/bells/<file>.wav).
+  //
+  // Two separate network paths, two separate config fields:
+  // - mopidyHost/mopidyPort: this plugin (running in the SignalK process, on
+  //   the host) calling Mopidy's JSON-RPC API. Defaults (localhost:6680)
+  //   match a default signalk-jukebox install, whose Mopidy port is reachable
+  //   from the host regardless of the jukebox container's own network mode
+  //   (signalk-container's signalkAccessiblePorts binds it on the host's own
+  //   loopback for exactly this).
+  // - mopidyAudioBaseUrl: the reverse direction - Mopidy (inside its
+  //   container) fetching the bell .wav back from this plugin. A default
+  //   (non-host-networked) container can't reach the host's own loopback, so
+  //   "http://localhost:<this SignalK server's port>" (the auto-built
+  //   default when this field is left blank) only works if the Mopidy
+  //   container uses host networking. Otherwise this must be set to this
+  //   SignalK server's real LAN IP.
+
+  function mopidyRpc(host, port, method, params) {
+    return fetchImpl(`http://${host}:${port}/mopidy/rpc`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params: params || {} })
+    })
+      .then((res) => res.json())
+      .then((body) => {
+        if (body.error) {
+          throw new Error(body.error.message || 'Mopidy RPC error');
+        }
+        return body.result;
+      });
+  }
+
+  function resolveMopidyAudioBaseUrl(options) {
+    if (options.mopidyAudioBaseUrl) {
+      return options.mopidyAudioBaseUrl.replace(/\/$/, '');
+    }
+    const port = (app.config && app.config.settings && app.config.settings.port) || 3000;
+    return `http://localhost:${port}`;
+  }
+
+  // ---- Snapserver zone targeting -------------------------------------------
+  //
+  // Mopidy has one shared output ("the Jukebox stream" in signalk-jukebox
+  // terms) - every Snapcast zone connected to it hears the same audio. To
+  // play the bell in only some zones, this mutes every OTHER currently
+  // connected zone for the strike's duration, then restores each one's own
+  // prior mute state (not just unmuting blindly - a zone the admin already
+  // had muted stays muted). Talks to Snapserver's own control port directly:
+  // raw newline-delimited JSON-RPC over TCP, not HTTP, matching
+  // signalk-jukebox's own snapserver-client.ts. Default port 1705 is
+  // signalk-jukebox's SNAPCAST_CONTROL_PORT.
+  //
+  // Only runs at all when mopidyZoneIds is a non-empty array - an empty/unset
+  // list means "every zone", the original unconditional behavior, and skips
+  // this entirely.
+
+  function snapserverCall(host, port, method, params) {
+    return new Promise((resolve, reject) => {
+      const socket = snapConnectImpl(port, host);
+      let buffer = '';
+      let settled = false;
+      socket.setEncoding('utf8');
+      socket.once('connect', () => {
+        socket.write(`${JSON.stringify({ id: 1, jsonrpc: '2.0', method, params })}\n`);
+      });
+      socket.on('data', (chunk) => {
+        buffer += chunk;
+        const newlineAt = buffer.indexOf('\n');
+        if (newlineAt === -1) {
+          return;
+        }
+        const line = buffer.slice(0, newlineAt);
+        settled = true;
+        socket.end();
+        let msg;
+        try {
+          msg = JSON.parse(line);
+        } catch (err) {
+          reject(err);
+          return;
+        }
+        if (msg.error) {
+          reject(new Error(msg.error.message || 'Snapserver RPC error'));
+        } else {
+          resolve(msg.result);
+        }
+      });
+      socket.once('error', (err) => {
+        if (!settled) {
+          reject(err);
+        }
+      });
+    });
+  }
+
+  async function listSnapclients(host, port) {
+    const status = await snapserverCall(host, port, 'Server.GetStatus');
+    const clients = [];
+    for (const group of status.server.groups) {
+      for (const client of group.clients) {
+        clients.push(client);
+      }
+    }
+    return clients;
+  }
+
+  async function muteOtherZones(host, port, selectedZoneIds) {
+    const clients = await listSnapclients(host, port);
+    const snapshot = [];
+    for (const client of clients) {
+      if (selectedZoneIds.includes(client.id)) {
+        continue;
+      }
+      snapshot.push({
+        id: client.id,
+        volume: client.config.volume.percent,
+        wasMuted: client.config.volume.muted
+      });
+      if (!client.config.volume.muted) {
+        await snapserverCall(host, port, 'Client.SetVolume', {
+          id: client.id,
+          volume: { percent: client.config.volume.percent, muted: true }
+        });
+      }
+    }
+    return snapshot;
+  }
+
+  async function restoreZones(host, port, snapshot) {
+    for (const entry of snapshot) {
+      if (entry.wasMuted) {
+        continue; // already muted before this strike - leave it muted
+      }
+      await snapserverCall(host, port, 'Client.SetVolume', {
+        id: entry.id,
+        volume: { percent: entry.volume, muted: false }
+      });
+    }
+  }
+
+  function playOnMopidy(strikes, options) {
+    const host = options.mopidyHost || 'localhost';
+    const port = options.mopidyPort || 6680;
+    const snapPort = options.snapcastControlPort || 1705;
+    const zoneIds = Array.isArray(options.mopidyZoneIds) ? options.mopidyZoneIds : [];
+    const url = `${resolveMopidyAudioBaseUrl(options)}/signalk-ships-bells/bells/${bellFile(strikes)}`;
+
+    (async () => {
+      let snapshot = [];
+      if (zoneIds.length > 0) {
+        try {
+          snapshot = await muteOtherZones(host, snapPort, zoneIds);
+        } catch (err) {
+          app.error(`ships-bells: could not mute other zones: ${err.message || err}`);
+        }
+      }
+
+      try {
+        // Clears whatever Mopidy is currently playing and replaces it with
+        // the bell strike - no duck/resume. A short interruption of the
+        // jukebox's own playback, not a mix. Documented in the schema
+        // description below.
+        await mopidyRpc(host, port, 'core.tracklist.clear');
+        const added = await mopidyRpc(host, port, 'core.tracklist.add', { uris: [url] });
+        await mopidyRpc(host, port, 'core.playback.play');
+
+        if (snapshot.length > 0) {
+          const track = added && added[0] && added[0].track;
+          const durationMs = (track && track.length) || 5000;
+          setTimeout(() => {
+            restoreZones(host, snapPort, snapshot).catch((err) => {
+              app.error(`ships-bells: could not restore zone mute state: ${err.message || err}`);
+            });
+          }, durationMs + 500);
+        }
+      } catch (err) {
+        app.error(`ships-bells: mopidy playback failed: ${err.message || err}`);
+        if (snapshot.length > 0) {
+          restoreZones(host, snapPort, snapshot).catch(() => {});
+        }
+      }
+    })();
+
+    return true;
+  }
 
   function isMuted(options) {
     if (options.muteWhenAnchoredOrMoored && MUTED_STATES.includes(currentNavState)) {
@@ -275,6 +486,10 @@ module.exports = function (app) {
 
     if (method === 'server-speaker' || method === 'both') {
       playOnServerSpeaker(strikes);
+    }
+
+    if (method === 'mopidy') {
+      playOnMopidy(strikes, options);
     }
   }
 
@@ -382,14 +597,63 @@ module.exports = function (app) {
           "(e.g. a helm tablet). 'Server speaker' plays directly on the machine " +
           "running Signal K, via a speaker wired to it - no browser needed, but " +
           "requires the 'play-sound' npm package plus a system audio player " +
-          "(e.g. mpg123 or aplay) installed on that machine.",
-        enum: ['webapp', 'server-speaker', 'both'],
+          "(e.g. mpg123 or aplay) installed on that machine, and that speaker can't " +
+          "also be in use by something else (e.g. a Snapcast client for " +
+          "signalk-jukebox) at the same time. 'Mopidy sound server' sends the bell " +
+          "through a Mopidy instance instead (e.g. signalk-jukebox's own container) " +
+          "- see the Mopidy fields below. It briefly interrupts whatever Mopidy is " +
+          "currently playing; there's no duck/resume.",
+        enum: ['webapp', 'server-speaker', 'both', 'mopidy'],
         enumNames: [
           'Webapp (play in browser)',
           'Server speaker (play on the Signal K host)',
-          'Both'
+          'Both',
+          'Mopidy sound server'
         ],
         default: 'webapp'
+      },
+      mopidyHost: {
+        type: 'string',
+        title: 'Mopidy host',
+        description:
+          "Only used when Playback method above is 'Mopidy sound server'. Where this " +
+          "plugin reaches Mopidy's own JSON-RPC API to send the play command. Default " +
+          "matches a default signalk-jukebox install on this same machine.",
+        default: 'localhost'
+      },
+      mopidyPort: {
+        type: 'integer',
+        title: 'Mopidy port',
+        description: "Only used when Playback method above is 'Mopidy sound server'.",
+        default: 6680
+      },
+      mopidyAudioBaseUrl: {
+        type: 'string',
+        title: 'Mopidy audio base URL (optional)',
+        description:
+          "Only used when Playback method above is 'Mopidy sound server'. Mopidy " +
+          "fetches the bell .wav files over HTTP from this plugin's own webapp " +
+          "(they aren't on Mopidy's local disk) - this is the base URL it uses to do " +
+          "that, e.g. http://192.168.1.50:3000. This is the opposite network " +
+          "direction from Mopidy host/port above, and matters when Mopidy runs in a " +
+          "container (e.g. signalk-jukebox): such a container usually can't reach " +
+          "this host's own loopback address. Leave blank to default to " +
+          "http://localhost:<this Signal K server's own port>, which only works if " +
+          "Mopidy's container uses host networking; otherwise set this to this " +
+          "Signal K server's real LAN IP.",
+        default: ''
+      },
+      snapcastControlPort: {
+        type: 'integer',
+        title: 'Snapcast control port',
+        description:
+          "Only used when Playback method above is 'Mopidy sound server' and one or " +
+          "more zones are selected in this plugin's own webapp (\"play bells in " +
+          "<zone>\" checkboxes) - reached at the same host as Mopidy host above. " +
+          "Default (1705) matches signalk-jukebox's SNAPCAST_CONTROL_PORT. Used to " +
+          "mute every zone except the selected ones for the strike, then restore " +
+          "each one's own prior mute state afterward.",
+        default: 1705
       },
       muteWhenAnchoredOrMoored: {
         type: 'boolean',
@@ -483,6 +747,50 @@ module.exports = function (app) {
       });
     });
 
+    // Lets the webapp show a live "play bells in <zone>" checkbox per
+    // signalk-jukebox zone (see playOnMopidy/mopidyZoneIds above) - a plain
+    // JSON-schema admin config field can't render a checkbox list populated
+    // from a live API call, so this lives in the webapp instead. Proxies
+    // signalk-jukebox's own /api/zones (same signalk-server process, reached
+    // over its own loopback HTTP port - not the Mopidy/Snapserver ports
+    // above, which are a different service). Returns an empty array (not an
+    // error) if signalk-jukebox isn't installed or its container isn't up
+    // yet, so the webapp can just show "no zones found" rather than break.
+    router.get('/zones', (req, res) => {
+      const port = (app.config && app.config.settings && app.config.settings.port) || 3000;
+      fetchImpl(`http://localhost:${port}/plugins/signalk-jukebox/api/zones`)
+        .then((r) => r.json())
+        .then((zones) => {
+          res.json(Array.isArray(zones) ? zones.map((z) => ({ id: z.id, name: z.name })) : []);
+        })
+        .catch((err) => {
+          app.debug(`ships-bells: could not fetch signalk-jukebox zones: ${err.message || err}`);
+          res.json([]);
+        });
+    });
+
+    router.get('/mopidy-zones', (req, res) => {
+      res.json({ zoneIds: Array.isArray(currentOptions.mopidyZoneIds) ? currentOptions.mopidyZoneIds : [] });
+    });
+
+    router.put('/mopidy-zones', (req, res) => {
+      const zoneIds = req.body && req.body.zoneIds;
+      if (!Array.isArray(zoneIds) || !zoneIds.every((id) => typeof id === 'string')) {
+        res.status(400).json({ error: 'zoneIds must be an array of strings' });
+        return;
+      }
+
+      currentOptions.mopidyZoneIds = zoneIds;
+      app.savePluginOptions(currentOptions, (err) => {
+        if (err) {
+          app.error(`ships-bells: failed to save mopidyZoneIds: ${err.message || err}`);
+          res.status(500).json({ error: 'Failed to save option' });
+          return;
+        }
+        res.json({ zoneIds: currentOptions.mopidyZoneIds });
+      });
+    });
+
     // Read/write the manual UTC offset. Deliberately a separate endpoint from
     // /schedule (rather than folded into it) - the webapp doesn't use this one,
     // it's for external tooling/automation that wants to set the offset without
@@ -538,13 +846,20 @@ module.exports = function (app) {
     });
 
     // Lets the "play test bell" button in the webapp also exercise server-speaker
-    // output when that's part of the configured playback method - a plain client-side
-    // <audio> play() can't reach the SignalK host's own speaker, so this is the only
-    // way the test button can cover that path. Intentionally ignores the
-    // anchored/moored mute setting, since a test triggered by hand is deliberate.
+    // and mopidy output when one of those is part of the configured playback
+    // method - a plain client-side <audio> play() can't reach either, so this is
+    // the only way the test button can cover those paths. Intentionally ignores
+    // the anchored/moored mute setting, since a test triggered by hand is
+    // deliberate.
     router.post('/test-strike', (req, res) => {
       const method = currentOptions.playbackMethod || 'webapp';
       const strikes = 8;
+
+      if (method === 'mopidy') {
+        playOnMopidy(strikes, currentOptions);
+        res.json({ playedOnMopidy: true });
+        return;
+      }
 
       if (method !== 'server-speaker' && method !== 'both') {
         res.json({ playedOnServerSpeaker: false, reason: 'playbackMethod is webapp-only' });

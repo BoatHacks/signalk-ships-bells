@@ -133,6 +133,73 @@
 
   loadSchedule();
 
+  var mopidyZonesControl = document.getElementById('mopidy-zones-control');
+  var mopidyZonesList = document.getElementById('mopidy-zones-list');
+  var mopidyZonesStatus = document.getElementById('mopidy-zones-status');
+
+  function saveMopidyZones(zoneIds) {
+    mopidyZonesStatus.textContent = 'Saving...';
+    fetch(API_BASE + '/mopidy-zones', {
+      method: 'PUT',
+      headers: Object.assign({ 'Content-Type': 'application/json' }, authHeaders()),
+      body: JSON.stringify({ zoneIds: zoneIds })
+    })
+      .then(function (res) {
+        if (!res.ok) {
+          var err = new Error('status ' + res.status);
+          err.statusText = statusTextForResponse(res, 'change zone selection');
+          throw err;
+        }
+        return res.json();
+      })
+      .then(function () {
+        mopidyZonesStatus.textContent = 'Saved.';
+        setTimeout(function () { mopidyZonesStatus.textContent = ''; }, 2000);
+      })
+      .catch(function (err) {
+        mopidyZonesStatus.textContent = err.statusText || 'Failed to save - try again.';
+        console.warn('ships-bells: failed to save mopidy zones', err);
+      });
+  }
+
+  function loadMopidyZones() {
+    fetch(API_BASE + '/zones', { headers: authHeaders() })
+      .then(function (res) { return res.json(); })
+      .then(function (zones) {
+        if (!Array.isArray(zones) || zones.length === 0) {
+          return;
+        }
+        return fetch(API_BASE + '/mopidy-zones', { headers: authHeaders() })
+          .then(function (res) { return res.json(); })
+          .then(function (data) {
+            var selected = (data && data.zoneIds) || [];
+            mopidyZonesList.innerHTML = '';
+            zones.forEach(function (zone) {
+              var label = document.createElement('label');
+              var checkbox = document.createElement('input');
+              checkbox.type = 'checkbox';
+              checkbox.value = zone.id;
+              checkbox.checked = selected.indexOf(zone.id) !== -1;
+              checkbox.addEventListener('change', function () {
+                var checked = Array.prototype.slice
+                  .call(mopidyZonesList.querySelectorAll('input:checked'))
+                  .map(function (el) { return el.value; });
+                saveMopidyZones(checked);
+              });
+              label.appendChild(checkbox);
+              label.appendChild(document.createTextNode(zone.name || zone.id));
+              mopidyZonesList.appendChild(label);
+            });
+            mopidyZonesControl.style.display = 'block';
+          });
+      })
+      .catch(function (err) {
+        console.warn('ships-bells: failed to load zones', err);
+      });
+  }
+
+  loadMopidyZones();
+
   var NOTIFICATION_PATH = 'notifications.plugins.signalkShipsBell.strike';
   var BELLS_BASE_URL = 'bells/';
 
@@ -164,6 +231,8 @@
       .then(function (data) {
         if (data.playedOnServerSpeaker) {
           console.log('ships-bells: test also played on server speaker');
+        } else if (data.playedOnMopidy) {
+          console.log('ships-bells: test also played on Mopidy sound server');
         } else if (data.reason && data.reason !== 'playbackMethod is webapp-only') {
           console.warn('ships-bells: server-speaker test failed -', data.reason);
         }

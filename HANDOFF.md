@@ -7,12 +7,12 @@ before making changes.
 ## What this is
 
 A SignalK Server plugin that plays traditional ship's bell audio (1-8 bells
-on the half-hour watch schedule, plus a New Year's Eve extra strike) with
-both a browser webapp and server-speaker playback path.
+on the half-hour watch schedule, plus a New Year's Eve extra strike) via a
+browser webapp, server-speaker, or Mopidy sound server playback path.
 
 - **GitHub**: `BoatHacks/signalk-ships-bells`
 - **npm**: [`signalk-ships-bells`](https://www.npmjs.com/package/signalk-ships-bells)
-- **Current published version**: `0.1.6`
+- **Current published version**: `0.1.7`
 - **License**: MIT (code) + CC BY 4.0 (bundled bell audio) — see `LICENSE`
 
 ## Repo layout
@@ -99,8 +99,45 @@ itself is untouched.
 **Manual test button** (`POST /plugins/signalk-ships-bells/test-strike`):
 deliberately bypasses *all* muting and the night-volume reduction — a manual
 test should always be clearly audible. Also exercises whichever
-`playbackMethod` is actually configured (webapp and/or server-speaker), not
-just local browser playback.
+`playbackMethod` is actually configured (webapp and/or server-speaker and/or
+mopidy), not just local browser playback.
+
+**Mopidy sound server playback** (`playbackMethod: 'mopidy'`, added because a
+user's `signalk-jukebox` Snapclient was holding the sound card open, starving
+`play-sound`'s server-speaker path): `playOnMopidy()` drives Mopidy over its
+JSON-RPC HTTP API (`core.tracklist.clear` → `core.tracklist.add` →
+`core.playback.play`, one async IIFE, single `try/catch` around the whole
+sequence — an earlier draft caught `core.playback.play` errors inline and
+silently dropped them; don't reintroduce that). Two directions of
+connectivity are involved and must not be conflated: this plugin (in the
+SignalK process, on the host) calls Mopidy at `mopidyHost`/`mopidyPort`
+(default `localhost:6680`); separately, Mopidy fetches the bell `.wav` back
+from this plugin's own webapp at
+`resolveMopidyAudioBaseUrl()`/`signalk-ships-bells/bells/<file>.wav` — that
+second direction is the hard one, since a non-host-networked container can't
+reach the host's own loopback, hence `mopidyAudioBaseUrl` (falls back to
+`http://localhost:<app.config.settings.port>` otherwise). No duck/resume:
+this briefly interrupts whatever Mopidy is already playing.
+
+**Per-zone targeting** (`mopidyZoneIds`, `GET`/`PUT
+.../mopidy-zones`): Mopidy has one shared stream reaching every Snapcast
+zone equally, so "play in zone A only" means muting every *other* zone via
+Snapserver's own raw-TCP JSON-RPC control API (`snapserverCall()` —
+newline-delimited over `net.createConnection`, NOT HTTP, same protocol as
+signalk-jukebox's own `snapserver-client.ts`) at `snapcastControlPort`
+(default `1705`), then restoring each excluded zone's own prior mute state
+afterward (`muteOtherZones`/`restoreZones` snapshot `wasMuted` per client
+before touching it, so a zone already muted by the admin stays muted). The
+restore is scheduled via `setTimeout(..., durationMs + 500)`, `durationMs`
+read directly off `core.tracklist.add`'s response
+(`added[0].track.length`), falling back to `5000` if absent. This can't be a
+static admin-config checkbox list because the zone list is dynamic (fetched
+live from signalk-jukebox), so it lives in the webapp instead
+(`GET /plugins/signalk-jukebox/api/zones` proxied through this plugin's own
+`GET /zones` route to avoid a cross-origin fetch from the browser) — an
+explicit choice, made after confirming the admin schema (RJSF-based) can't
+render options populated from a live API call, same limitation that forced
+signalk-jukebox's own config panel into a custom React UI earlier.
 
 **Notification shape**: strikes are broadcast as a delta on
 `notifications.plugins.signalkShipsBell.strike`, with `value.data = { strikes,
@@ -111,8 +148,10 @@ was defaulting it to include `"sound"`, which wasn't wanted.
 /plugins/signalk-ships-bells/schedule` (read/write `watchScheme` from the
 webapp, not just the admin config UI), `GET`/`PUT .../offset` (read/write
 `utcOffsetEnabled`/`utcOffsetMinutes`; PUT supports partial updates — either
-field or both; not used by the webapp, for external tooling), and `POST
-.../test-strike` (see above).
+field or both; not used by the webapp, for external tooling), `POST
+.../test-strike` (see above), `GET .../zones` (proxies signalk-jukebox's own
+zone list for the webapp), and `GET`/`PUT .../mopidy-zones` (read/write
+`mopidyZoneIds`, the webapp's per-zone checkbox selection).
 
 **Testing quirks worth knowing** (both discovered the hard way):
 - `play-sound` will find and use *real* system audio players (this sandbox
@@ -130,15 +169,23 @@ field or both; not used by the webapp, for external tooling), and `POST
 
 ## Test suite
 
-`npm test` runs `node --test test/*.test.js`. Currently **42 tests**. Covers:
+`npm test` runs `node --test test/*.test.js`. Currently **46 tests**. Covers:
 bell-count math for both schemes, quiet-hours/night-volume time-range math
 (including midnight wraparound and invalid-input handling), the manual UTC
 offset (`effectiveMinutesSinceMidnight`, `effectiveWatchScheme`), New Year's
 trigger-time calculation (including year rollover and the long-delay
 chunking), plugin lifecycle (start/stop/restart), schema consistency
 (enum/enumNames stay in sync, defaults are valid), the `/schedule`, `/offset`,
-and `/test-strike` REST endpoints, and a mocked-timer end-to-end regression
-test for the New Year's transition.
+and `/test-strike` REST endpoints, a mocked-timer end-to-end regression test
+for the New Year's transition, and the mopidy playback method (RPC call
+order, `mopidyHost`/`mopidyPort`/`mopidyAudioBaseUrl` resolution including
+the `app.config.settings.port` fallback, and that an RPC failure is logged
+via `app.error` rather than thrown — using the `_setFetchForTesting` and
+`_setSnapConnectForTesting` hooks, mirroring the pre-existing
+`_setAudioPlayerForTesting`). **Not yet covered**: the actual zone-muting/
+restore path (`muteOtherZones`/`restoreZones` with a non-empty
+`mopidyZoneIds`) — worth adding via `_setSnapConnectForTesting` before
+relying on it further.
 
 **Known flaky test**: "New Year's Eve gets an extra 8-bell strike..." in
 `test/plugin.test.js` fails intermittently depending on the date the suite is
@@ -196,3 +243,6 @@ hand).
   `simple-cycle`.
 - Raw `setTimeout` for anything that might need to wait longer than ~24 days
   — use `scheduleLongTimeout`.
+- Per-zone Mopidy selection as an admin-config checkbox list — the zone list
+  is fetched live from signalk-jukebox and can't be rendered by the static
+  RJSF admin schema; it belongs in the webapp (`public/`), as implemented.
