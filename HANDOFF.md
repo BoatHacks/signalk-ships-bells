@@ -98,11 +98,26 @@ itself is untouched.
 
 **Manual test button** (`POST /plugins/signalk-ships-bells/test-strike`):
 deliberately bypasses *all* muting and the night-volume reduction — a manual
-test should always be clearly audible. Also exercises whichever
-`playbackMethod` is actually configured (webapp and/or server-speaker and/or
-mopidy), not just local browser playback.
+test should always be clearly audible. Also exercises server-speaker and/or
+Mopidy playback for whichever of `playbackServerSpeaker`/`playbackMopidy` are
+on, not just local browser playback.
 
-**Mopidy sound server playback** (`playbackMethod: 'mopidy'`, added because a
+**Playback outputs are three independent booleans**
+(`playbackWebapp`/`playbackServerSpeaker`/`playbackMopidy`, admin-config
+checkboxes, `playbackWebapp` defaulting `true` and the other two `false`),
+not a single-select - any combination can be on at once, e.g. webapp +
+Mopidy together. Replaced the old single `playbackMethod` enum
+(`'webapp'`/`'server-speaker'`/`'both'`/`'mopidy'`), which couldn't express
+"webapp AND mopidy" or "server-speaker AND mopidy". `migratePlaybackMethod()`
+runs once at `plugin.start()`: if `playbackMethod` is present and none of the
+three new keys exist yet, it derives them (`'both'` → both `playbackWebapp`
+and `playbackServerSpeaker`), deletes `playbackMethod`, and saves via
+`app.savePluginOptions` - so installs configured before this change keep
+working without the admin re-checking anything. A no-op as soon as any new
+key is present (including a deliberate `false`), and a no-op for a fresh
+install with no legacy field at all.
+
+**Mopidy sound server playback** (`playbackMopidy: true`, added because a
 user's `signalk-jukebox` Snapclient was holding the sound card open, starving
 `play-sound`'s server-speaker path): `playOnMopidy()` drives Mopidy over its
 JSON-RPC HTTP API (`core.tracklist.clear` → `core.tracklist.add` →
@@ -134,6 +149,23 @@ captured position. If nothing was playing (`get_state` returns anything but
 `'playing'`), `duckForBell()` returns `null` and `unduckAfterBell()` is a
 no-op — the bell just plays and gets cleaned out of the tracklist
 afterward, nothing to resume.
+
+**Night-volume reduction also applies to Mopidy playback**, via
+`duckVolumeForBell()`/`restoreVolumeAfterBell()`: `strikeBell()` computes
+`volumeFactor` once (via `nightVolumeFactorForMoment()`, same as the webapp
+path) and passes it into `playOnMopidy()`. If `volumeFactor < 1`,
+`duckVolumeForBell()` reads Mopidy's current mixer level
+(`core.mixer.get_volume`), scales it by the factor
+(`Math.round(originalVolume * volumeFactor)`, clamped 0-100), and sets it
+(`core.mixer.set_volume`) before the bell plays; `restoreVolumeAfterBell()`
+sets the mixer back to the *original* level afterward (not a hardcoded
+value), so a level set elsewhere (e.g. signalk-jukebox's own volume control)
+survives the strike unchanged. At `volumeFactor === 1` (the common case, no
+reduction active right now) neither function makes any RPC call at all -
+this is why most of the existing mopidy tests didn't need updating when this
+was added. The manual test button bypasses this like it bypasses muting -
+`playOnMopidy(strikes, currentOptions)` is called from `/test-strike` without
+a `volumeFactor` argument, which defaults to `1` inside `playOnMopidy()`.
 
 **Per-zone targeting** (`mopidyZoneIds`, `GET`/`PUT
 .../mopidy-zones`): Mopidy has one shared stream reaching every Snapcast
@@ -185,7 +217,7 @@ zone list for the webapp), and `GET`/`PUT .../mopidy-zones` (read/write
 
 ## Test suite
 
-`npm test` runs `node --test test/*.test.js`. Currently **47 tests**. Covers:
+`npm test` runs `node --test test/*.test.js`. Currently **51 tests**. Covers:
 bell-count math for both schemes, quiet-hours/night-volume time-range math
 (including midnight wraparound and invalid-input handling), the manual UTC
 offset (`effectiveMinutesSinceMidnight`, `effectiveWatchScheme`), New Year's
@@ -193,15 +225,19 @@ trigger-time calculation (including year rollover and the long-delay
 chunking), plugin lifecycle (start/stop/restart), schema consistency
 (enum/enumNames stay in sync, defaults are valid), the `/schedule`, `/offset`,
 and `/test-strike` REST endpoints, a mocked-timer end-to-end regression test
-for the New Year's transition, and the mopidy playback method (RPC call
-order, `mopidyHost`/`mopidyPort`/`mopidyAudioBaseUrl` resolution including
-the `app.config.settings.port` fallback, and that an RPC failure is logged
-via `app.error` rather than thrown — using the `_setFetchForTesting` and
-`_setSnapConnectForTesting` hooks, mirroring the pre-existing
-`_setAudioPlayerForTesting`). **Not yet covered**: the actual zone-muting/
-restore path (`muteOtherZones`/`restoreZones` with a non-empty
-`mopidyZoneIds`) — worth adding via `_setSnapConnectForTesting` before
-relying on it further.
+for the New Year's transition, the mopidy playback method (RPC call order,
+`mopidyHost`/`mopidyPort`/`mopidyAudioBaseUrl` resolution including the
+`app.config.settings.port` fallback, an RPC failure logged via `app.error`
+rather than thrown, and the duck/resume sequence when something was already
+playing — using the `_setFetchForTesting` and `_setSnapConnectForTesting`
+hooks, mirroring the pre-existing `_setAudioPlayerForTesting`),
+`migratePlaybackMethod()` for all four legacy `playbackMethod` values plus
+the fresh-install no-op case, that `playbackWebapp`+`playbackMopidy` can both
+fire from one strike, and that Mopidy's mixer volume is ducked/restored
+during the configured night-volume-reduction hours. **Not yet covered**: the
+actual zone-muting/restore path (`muteOtherZones`/`restoreZones` with a
+non-empty `mopidyZoneIds`) — worth adding via `_setSnapConnectForTesting`
+before relying on it further.
 
 **Known flaky test**: "New Year's Eve gets an extra 8-bell strike..." in
 `test/plugin.test.js` fails intermittently depending on the date the suite is

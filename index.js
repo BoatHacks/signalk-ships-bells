@@ -418,11 +418,40 @@ module.exports = function (app) {
     await mopidyRpc(host, port, 'core.playback.seek', { time_position: snapshot.positionMs });
   }
 
-  function playOnMopidy(strikes, options) {
+  // Night-volume reduction applies to Mopidy playback too, via Mopidy's own
+  // mixer volume - scaled by the same volumeFactor (0-1) the webapp applies
+  // to its own <audio> element. Only touches the mixer at all when a
+  // reduction is actually in effect (volumeFactor < 1); the reduced level is
+  // read back to full afterward rather than to a hardcoded value, so
+  // whatever level the mixer was already at (e.g. set by signalk-jukebox's
+  // own volume control) survives the strike unchanged.
+
+  async function duckVolumeForBell(host, port, volumeFactor) {
+    if (volumeFactor >= 1) {
+      return null;
+    }
+    const originalVolume = await mopidyRpc(host, port, 'core.mixer.get_volume');
+    if (typeof originalVolume !== 'number') {
+      return null;
+    }
+    const bellVolume = Math.max(0, Math.min(100, Math.round(originalVolume * volumeFactor)));
+    await mopidyRpc(host, port, 'core.mixer.set_volume', { volume: bellVolume });
+    return originalVolume;
+  }
+
+  async function restoreVolumeAfterBell(host, port, originalVolume) {
+    if (originalVolume === null || originalVolume === undefined) {
+      return;
+    }
+    await mopidyRpc(host, port, 'core.mixer.set_volume', { volume: originalVolume });
+  }
+
+  function playOnMopidy(strikes, options, volumeFactor) {
     const host = options.mopidyHost || 'localhost';
     const port = options.mopidyPort || 6680;
     const snapPort = options.snapcastControlPort || 1705;
     const zoneIds = Array.isArray(options.mopidyZoneIds) ? options.mopidyZoneIds : [];
+    const factor = typeof volumeFactor === 'number' ? volumeFactor : 1;
     const url = `${resolveMopidyAudioBaseUrl(options)}/signalk-ships-bells/bells/${bellFile(strikes)}`;
 
     (async () => {
@@ -436,8 +465,10 @@ module.exports = function (app) {
       }
 
       let playbackSnapshot = null;
+      let originalVolume = null;
       try {
         playbackSnapshot = await duckForBell(host, port);
+        originalVolume = await duckVolumeForBell(host, port, factor);
 
         const added = await mopidyRpc(host, port, 'core.tracklist.add', { uris: [url] });
         const bellTlTrack = added && added[0];
@@ -450,6 +481,7 @@ module.exports = function (app) {
               await mopidyRpc(host, port, 'core.tracklist.remove', { criteria: { tlid: [bellTlTrack.tlid] } });
             }
             await unduckAfterBell(host, port, playbackSnapshot);
+            await restoreVolumeAfterBell(host, port, originalVolume);
           })().catch((err) => {
             app.error(`ships-bells: could not resume mopidy playback after bell: ${err.message || err}`);
           }).finally(() => {
@@ -463,6 +495,7 @@ module.exports = function (app) {
       } catch (err) {
         app.error(`ships-bells: mopidy playback failed: ${err.message || err}`);
         unduckAfterBell(host, port, playbackSnapshot).catch(() => {});
+        restoreVolumeAfterBell(host, port, originalVolume).catch(() => {});
         if (zoneSnapshot.length > 0) {
           restoreZones(host, snapPort, zoneSnapshot).catch(() => {});
         }
@@ -494,15 +527,21 @@ module.exports = function (app) {
       return;
     }
 
-    const method = options.playbackMethod || 'webapp';
-    app.debug(`ships-bells: striking ${strikes} bell(s), file ${bellFile(strikes)}, method=${method}`);
+    const webapp = options.playbackWebapp !== undefined ? !!options.playbackWebapp : true;
+    const serverSpeaker = !!options.playbackServerSpeaker;
+    const mopidy = !!options.playbackMopidy;
+    app.debug(
+      `ships-bells: striking ${strikes} bell(s), file ${bellFile(strikes)}, ` +
+      `webapp=${webapp}, serverSpeaker=${serverSpeaker}, mopidy=${mopidy}`
+    );
 
-    if (method === 'webapp' || method === 'both') {
+    const volumeFactor = nightVolumeFactorForMoment(new Date(), options);
+
+    if (webapp) {
       // The public/ webapp (served at /signalk-ships-bells/) subscribes to this
       // notification over the SignalK websocket and plays the referenced file
       // via <audio>, so it sounds wherever that webapp is open (helm tablet,
       // MFD browser, etc). Anything else on the SignalK bus can react to it too.
-      const volumeFactor = nightVolumeFactorForMoment(new Date(), options);
       app.handleMessage(plugin.id, {
         updates: [
           {
@@ -522,12 +561,12 @@ module.exports = function (app) {
       });
     }
 
-    if (method === 'server-speaker' || method === 'both') {
+    if (serverSpeaker) {
       playOnServerSpeaker(strikes);
     }
 
-    if (method === 'mopidy') {
-      playOnMopidy(strikes, options);
+    if (mopidy) {
+      playOnMopidy(strikes, options, volumeFactor);
     }
   }
 
@@ -627,50 +666,57 @@ module.exports = function (app) {
         maximum: 240,
         default: 0
       },
-      playbackMethod: {
-        type: 'string',
-        title: 'Playback method',
+      playbackWebapp: {
+        type: 'boolean',
+        title: 'Play in web player',
         description:
-          "'Webapp' plays through the browser wherever this plugin's webapp is open " +
-          "(e.g. a helm tablet). 'Server speaker' plays directly on the machine " +
-          "running Signal K, via a speaker wired to it - no browser needed, but " +
-          "requires the 'play-sound' npm package plus a system audio player " +
-          "(e.g. mpg123 or aplay) installed on that machine, and that speaker can't " +
-          "also be in use by something else (e.g. a Snapcast client for " +
-          "signalk-jukebox) at the same time. 'Mopidy sound server' sends the bell " +
-          "through a Mopidy instance instead (e.g. signalk-jukebox's own container) " +
-          "- see the Mopidy fields below. If Mopidy is already playing something, " +
-          "it's paused (ducked) for the strike and resumed at the same position " +
-          "afterward.",
-        enum: ['webapp', 'server-speaker', 'both', 'mopidy'],
-        enumNames: [
-          'Webapp (play in browser)',
-          'Server speaker (play on the Signal K host)',
-          'Both',
-          'Mopidy sound server'
-        ],
-        default: 'webapp'
+          "Plays through the browser wherever this plugin's webapp is open (e.g. a " +
+          "helm tablet). Combinable with either output below - any combination can " +
+          "be enabled at once.",
+        default: true
+      },
+      playbackServerSpeaker: {
+        type: 'boolean',
+        title: 'Play on server (local speaker)',
+        description:
+          "Plays directly on the machine running Signal K, via a speaker wired to " +
+          "it - no browser needed, but requires the 'play-sound' npm package plus a " +
+          "system audio player (e.g. mpg123 or aplay) installed on that machine, and " +
+          "that speaker can't also be in use by something else (e.g. a Snapcast " +
+          "client for signalk-jukebox) at the same time - use Mopidy playback below " +
+          "instead in that case.",
+        default: false
+      },
+      playbackMopidy: {
+        type: 'boolean',
+        title: 'Play via Mopidy sound server',
+        description:
+          "Sends the bell through a Mopidy instance instead (e.g. signalk-jukebox's " +
+          "own container) - see the Mopidy fields below. If Mopidy is already " +
+          "playing something, it's paused (ducked) for the strike and resumed at " +
+          "the same position afterward.",
+        default: false
       },
       mopidyHost: {
         type: 'string',
         title: 'Mopidy host',
         description:
-          "Only used when Playback method above is 'Mopidy sound server'. Where this " +
-          "plugin reaches Mopidy's own JSON-RPC API to send the play command. Default " +
-          "matches a default signalk-jukebox install on this same machine.",
+          "Only used when 'Play via Mopidy sound server' above is checked. Where " +
+          "this plugin reaches Mopidy's own JSON-RPC API to send the play command. " +
+          "Default matches a default signalk-jukebox install on this same machine.",
         default: 'localhost'
       },
       mopidyPort: {
         type: 'integer',
         title: 'Mopidy port',
-        description: "Only used when Playback method above is 'Mopidy sound server'.",
+        description: "Only used when 'Play via Mopidy sound server' above is checked.",
         default: 6680
       },
       mopidyAudioBaseUrl: {
         type: 'string',
         title: 'Mopidy audio base URL (optional)',
         description:
-          "Only used when Playback method above is 'Mopidy sound server'. Mopidy " +
+          "Only used when 'Play via Mopidy sound server' above is checked. Mopidy " +
           "fetches the bell .wav files over HTTP from this plugin's own webapp " +
           "(they aren't on Mopidy's local disk) - this is the base URL it uses to do " +
           "that, e.g. http://192.168.1.50:3000. This is the opposite network " +
@@ -686,7 +732,7 @@ module.exports = function (app) {
         type: 'integer',
         title: 'Snapcast control port',
         description:
-          "Only used when Playback method above is 'Mopidy sound server' and one or " +
+          "Only used when 'Play via Mopidy sound server' above is checked and one or " +
           "more zones are selected in this plugin's own webapp (\"play bells in " +
           "<zone>\" checkboxes) - reached at the same host as Mopidy host above. " +
           "Default (1705) matches signalk-jukebox's SNAPCAST_CONTROL_PORT. Used to " +
@@ -722,9 +768,10 @@ module.exports = function (app) {
         title: 'Reduce volume during a time range',
         description:
           "For when you don't want to mute the bell entirely, just have it quieter " +
-          "overnight. Only affects webapp playback (browser volume) - play-sound " +
-          "doesn't offer a portable way to control server-speaker output volume, " +
-          "so that always plays at full volume regardless of this setting.",
+          "overnight. Affects webapp playback (browser volume) and Mopidy playback " +
+          "(Mopidy's own mixer volume, restored afterward) - play-sound doesn't " +
+          "offer a portable way to control server-speaker output volume, so that " +
+          "always plays at full volume regardless of this setting.",
         default: false
       },
       nightVolumeStart: {
@@ -891,23 +938,27 @@ module.exports = function (app) {
     // the anchored/moored mute setting, since a test triggered by hand is
     // deliberate.
     router.post('/test-strike', (req, res) => {
-      const method = currentOptions.playbackMethod || 'webapp';
       const strikes = 8;
+      const serverSpeaker = !!currentOptions.playbackServerSpeaker;
+      const mopidy = !!currentOptions.playbackMopidy;
 
-      if (method === 'mopidy') {
+      if (mopidy) {
         playOnMopidy(strikes, currentOptions);
-        res.json({ playedOnMopidy: true });
-        return;
       }
 
-      if (method !== 'server-speaker' && method !== 'both') {
-        res.json({ playedOnServerSpeaker: false, reason: 'playbackMethod is webapp-only' });
+      if (!serverSpeaker) {
+        res.json({
+          playedOnServerSpeaker: false,
+          playedOnMopidy: mopidy,
+          reason: 'server-speaker playback is not enabled'
+        });
         return;
       }
 
       const played = playOnServerSpeaker(strikes);
       res.json({
         playedOnServerSpeaker: played,
+        playedOnMopidy: mopidy,
         reason: played ? undefined : 'play-sound unavailable - check server logs'
       });
     });
@@ -915,8 +966,38 @@ module.exports = function (app) {
 
   // ---- Lifecycle ------------------------------------------------------------
 
+  // Migrates the old single-select `playbackMethod` ('webapp'/'server-speaker'/
+  // 'both'/'mopidy') to the three independent checkboxes it was replaced by, so
+  // installs configured before that change keep working without the admin
+  // having to re-check anything. Only runs once - a no-op as soon as any of the
+  // new keys is present (including a deliberate `false`), and a no-op if there
+  // was never a playbackMethod to migrate from (a fresh install).
+  function migratePlaybackMethod(options) {
+    const hasNewFlags = ['playbackWebapp', 'playbackServerSpeaker', 'playbackMopidy'].some((key) =>
+      Object.prototype.hasOwnProperty.call(options, key)
+    );
+    if (hasNewFlags || !options.playbackMethod) {
+      return false;
+    }
+    const method = options.playbackMethod;
+    options.playbackWebapp = method === 'webapp' || method === 'both';
+    options.playbackServerSpeaker = method === 'server-speaker' || method === 'both';
+    options.playbackMopidy = method === 'mopidy';
+    delete options.playbackMethod;
+    return true;
+  }
+
   plugin.start = function (options) {
     app.debug('starting ships-bell plugin', options);
+
+    if (migratePlaybackMethod(options)) {
+      app.savePluginOptions(options, (err) => {
+        if (err) {
+          app.error(`ships-bells: failed to save migrated playback options: ${err.message || err}`);
+        }
+      });
+    }
+
     currentOptions = options;
 
     if (options.enabled === false) {

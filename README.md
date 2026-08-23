@@ -53,38 +53,41 @@ listens for it over the SignalK websocket and plays the matching audio file.
   - **Reduce volume during a time range** — for when full silence isn't
     wanted, just quieter. Same `HH:MM` start/end shape as above (independent
     of it — different range if you want), plus a reduced volume level (%).
-    Only affects webapp playback (browser volume), applied on top of
-    whatever the webapp's own volume slider is set to; server-speaker
+    Affects webapp playback (browser volume, applied on top of whatever the
+    webapp's own volume slider is set to) and Mopidy playback (Mopidy's own
+    mixer volume, restored to whatever it was afterward); server-speaker
     playback via `play-sound` doesn't offer a portable way to control output
     volume, so it always plays at full volume regardless of this setting.
-  - **Playback method** — `webapp`, `server speaker`, `both`, or `mopidy`:
-    - *Webapp* — each strike is sent as a `notifications.plugins.signalkShipsBell.strike`
-      delta. The bundled webapp (open it from the SignalK admin UI's webapps
-      list, or at `/signalk-ships-bells/`) subscribes to that delta over the
-      websocket and plays the matching file via `<audio>` — so it sounds
-      wherever that page is open (e.g. a browser tab on an MFD or tablet at
-      the helm). A "play test bell" button is included for checking that
-      audio works without waiting for the next half hour - it plays locally
-      in the browser immediately, and also asks the plugin to attempt
-      server-speaker or mopidy playback if one of those is part of the
-      configured playback method, so it exercises whichever output(s) are
-      actually configured.
-    - *Server speaker* — plays directly on the machine running Signal K, via a
-      speaker wired to it, using [play-sound](https://www.npmjs.com/package/play-sound)
-      to shell out to a system audio player. No browser needed. This is the
-      same underlying approach as
+  - **Playback outputs** — three independent checkboxes, any combination of
+    which can be on at once:
+    - *Play in web player* (on by default) — each strike is sent as a
+      `notifications.plugins.signalkShipsBell.strike` delta. The bundled
+      webapp (open it from the SignalK admin UI's webapps list, or at
+      `/signalk-ships-bells/`) subscribes to that delta over the websocket
+      and plays the matching file via `<audio>` — so it sounds wherever that
+      page is open (e.g. a browser tab on an MFD or tablet at the helm). A
+      "play test bell" button is included for checking that audio works
+      without waiting for the next half hour - it plays locally in the
+      browser immediately, and also asks the plugin to attempt server-speaker
+      and/or Mopidy playback for whichever of those checkboxes are also on,
+      so it exercises whichever output(s) are actually configured.
+    - *Play on server (local speaker)* — plays directly on the machine
+      running Signal K, via a speaker wired to it, using
+      [play-sound](https://www.npmjs.com/package/play-sound) to shell out to
+      a system audio player. No browser needed. This is the same underlying
+      approach as
       [signalk-audio-notifications](https://github.com/meri-imperiumi/signalk-audio-notifications),
       which plays spoken alerts the same way. Requires a system player such as
       `mpg123` or `aplay` to be installed on that machine — `play-sound` picks
       whichever it finds. If none is found, an error is logged and playback is
       silently skipped rather than crashing the plugin. Can't be used at the
       same time as another program (e.g. a Snapcast client for
-      signalk-jukebox) that already has the sound card open — use *Mopidy
-      sound server* below instead in that case.
-    - *Both* — does webapp and server speaker together.
-    - *Mopidy sound server* — sends the bell through a Mopidy instance instead
-      (e.g. [signalk-jukebox](https://github.com/BoatHacks/signalk-jukebox)'s
-      own container), so it plays out through whatever sound output Mopidy is
+      signalk-jukebox) that already has the sound card open — use *Play via
+      Mopidy sound server* below instead in that case.
+    - *Play via Mopidy sound server* — sends the bell through a Mopidy
+      instance instead (e.g.
+      [signalk-jukebox](https://github.com/BoatHacks/signalk-jukebox)'s own
+      container), so it plays out through whatever sound output Mopidy is
       already set up for, rather than opening the sound card directly. Two
       new config fields (**Mopidy host**, **Mopidy port**) point at Mopidy's
       own API — default to `localhost:6680`, matching a default
@@ -97,8 +100,9 @@ listens for it over the SignalK websocket and plays the matching audio file.
       Signal K server's real LAN IP otherwise. A fourth (**Snapcast control
       port**, default `1705`, signalk-jukebox's own control port) is only
       used together with the per-zone selection below. If Mopidy is already
-      playing something, it's paused for the strike and resumed at the same
-      position afterward, rather than losing its place.
+      playing something, it's paused for the strike (and its volume lowered
+      first, if within the reduced-volume range above) and resumed at the
+      same position and volume afterward, rather than losing its place.
 
       The plugin's own webapp additionally shows a **"Play bells in
       \<zone\>"** checkbox list, one per Snapcast zone currently known to
@@ -109,6 +113,11 @@ listens for it over the SignalK websocket and plays the matching audio file.
       duration (via the Snapcast control port above), then restores each
       one's own prior mute state afterward — a zone you'd already muted by
       hand stays muted.
+
+    Installs configured before this became three checkboxes (the old
+    single-select `webapp`/`server speaker`/`both`/`mopidy` field) migrate
+    automatically the first time the plugin starts - no need to re-check
+    anything.
 - **Schedule selection from the webapp** — the same watch-bell schedule choice
   is also available directly in `public/`, via a dropdown that reads and
   writes the setting through a small REST API exposed by the plugin

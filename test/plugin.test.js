@@ -55,7 +55,7 @@ test('schema enum/enumNames stay in sync and defaults are valid members', () => 
   const plugin = createPlugin(app);
   const props = plugin.schema.properties;
 
-  for (const key of ['watchScheme', 'playbackMethod']) {
+  for (const key of ['watchScheme']) {
     assert.ok(Array.isArray(props[key].enum), `${key}.enum should be an array`);
     assert.ok(Array.isArray(props[key].enumNames), `${key}.enumNames should be an array`);
     assert.strictEqual(
@@ -71,6 +71,9 @@ test('schema enum/enumNames stay in sync and defaults are valid members', () => 
 
   assert.strictEqual(typeof props.enabled.default, 'boolean');
   assert.strictEqual(typeof props.muteWhenAnchoredOrMoored.default, 'boolean');
+  assert.strictEqual(props.playbackWebapp.default, true);
+  assert.strictEqual(props.playbackServerSpeaker.default, false);
+  assert.strictEqual(props.playbackMopidy.default, false);
 });
 
 test('start()/stop() do not throw when enabled, and stop() clears its timers', () => {
@@ -135,6 +138,7 @@ test('PUT /schedule rejects an invalid scheme with 400 and does not call savePlu
   const router = makeFakeRouter();
   plugin.registerWithRouter(router);
   plugin.start({ enabled: true, watchScheme: 'traditional', playbackMethod: 'webapp', muteWhenAnchoredOrMoored: true });
+  saveCalled = false; // start() migrates the legacy playbackMethod field and saves once; not what's under test here
 
   const res = makeFakeRes();
   router.routes.put['/schedule']({ body: { watchScheme: 'not-a-real-scheme' } }, res);
@@ -203,6 +207,7 @@ test('PUT /offset rejects a non-boolean utcOffsetEnabled with 400 and does not s
   const router = makeFakeRouter();
   plugin.registerWithRouter(router);
   plugin.start({ enabled: true, watchScheme: 'traditional', playbackMethod: 'webapp', muteWhenAnchoredOrMoored: true });
+  saveCalled = false; // start() migrates the legacy playbackMethod field and saves once; not what's under test here
 
   const res = makeFakeRes();
   router.routes.put['/offset']({ body: { utcOffsetEnabled: 'yes' } }, res);
@@ -221,6 +226,7 @@ test('PUT /offset rejects an out-of-range or non-integer utcOffsetMinutes with 4
   const router = makeFakeRouter();
   plugin.registerWithRouter(router);
   plugin.start({ enabled: true, watchScheme: 'traditional', playbackMethod: 'webapp', muteWhenAnchoredOrMoored: true });
+  saveCalled = false; // start() migrates the legacy playbackMethod field and saves once; not what's under test here
 
   for (const bad of [-1, 241, 12.5, 'ninety']) {
     const res = makeFakeRes();
@@ -297,7 +303,7 @@ test('PUT /offset returns 500 if savePluginOptions fails', () => {
   plugin.stop();
 });
 
-test('POST /test-strike does not touch server speaker when playbackMethod is webapp', () => {
+test('POST /test-strike does not touch server speaker when only webapp is enabled', () => {
   const app = makeMockApp();
   const plugin = createPlugin(app);
   const router = makeFakeRouter();
@@ -308,7 +314,7 @@ test('POST /test-strike does not touch server speaker when playbackMethod is web
   router.routes.post['/test-strike']({}, res);
 
   assert.strictEqual(res.body.playedOnServerSpeaker, false);
-  assert.strictEqual(res.body.reason, 'playbackMethod is webapp-only');
+  assert.strictEqual(res.body.reason, 'server-speaker playback is not enabled');
 
   plugin.stop();
 });
@@ -528,6 +534,126 @@ test('mopidy RPC failure is logged via app.error, not thrown', async () => {
   await new Promise((resolve) => setImmediate(resolve));
 
   assert.ok(app._errorLog.some((msg) => msg.includes('connection refused')));
+
+  plugin.stop();
+});
+
+test('legacy playbackMethod values migrate to the three checkboxes and are persisted', () => {
+  const cases = [
+    ['webapp', { playbackWebapp: true, playbackServerSpeaker: false, playbackMopidy: false }],
+    ['server-speaker', { playbackWebapp: false, playbackServerSpeaker: true, playbackMopidy: false }],
+    ['both', { playbackWebapp: true, playbackServerSpeaker: true, playbackMopidy: false }],
+    ['mopidy', { playbackWebapp: false, playbackServerSpeaker: false, playbackMopidy: true }]
+  ];
+
+  for (const [method, expected] of cases) {
+    const app = makeMockApp();
+    let saved = null;
+    app.savePluginOptions = (options, cb) => { saved = options; cb(null); };
+    const plugin = createPlugin(app);
+    const options = { enabled: true, watchScheme: 'traditional', playbackMethod: method, muteWhenAnchoredOrMoored: true };
+
+    plugin.start(options);
+
+    assert.strictEqual(options.playbackMethod, undefined);
+    assert.strictEqual(options.playbackWebapp, expected.playbackWebapp);
+    assert.strictEqual(options.playbackServerSpeaker, expected.playbackServerSpeaker);
+    assert.strictEqual(options.playbackMopidy, expected.playbackMopidy);
+    assert.strictEqual(saved, options);
+
+    plugin.stop();
+  }
+});
+
+test('a fresh install with no legacy playbackMethod is left alone (no migration, no save)', () => {
+  const app = makeMockApp();
+  let saveCalled = false;
+  app.savePluginOptions = (options, cb) => { saveCalled = true; cb(null); };
+  const plugin = createPlugin(app);
+  const options = { enabled: true, watchScheme: 'traditional', playbackWebapp: true, muteWhenAnchoredOrMoored: true };
+
+  plugin.start(options);
+
+  assert.strictEqual(saveCalled, false);
+  assert.strictEqual(options.playbackServerSpeaker, undefined);
+
+  plugin.stop();
+});
+
+test('webapp and mopidy checkboxes can both be enabled at once and both fire on a strike', async (t) => {
+  const app = makeMockApp();
+  const messages = [];
+  app.handleMessage = (pluginId, delta) => messages.push(delta);
+  const plugin = createPlugin(app);
+  const fakeFetch = makeFakeFetch([{ result: 'stopped' }, { result: [] }, { result: null }]);
+  plugin._setFetchForTesting(fakeFetch);
+
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: new Date('2026-06-15T22:00:00.000Z').getTime() });
+  plugin.start({
+    enabled: true,
+    watchScheme: 'traditional',
+    playbackWebapp: true,
+    playbackServerSpeaker: false,
+    playbackMopidy: true,
+    muteWhenAnchoredOrMoored: false
+  });
+
+  t.mock.timers.tick(30 * 60 * 1000); // next half-hour boundary
+  await flushMicrotasks();
+
+  assert.strictEqual(messages.length, 1);
+  assert.strictEqual(messages[0].updates[0].values[0].path, 'notifications.plugins.signalkShipsBell.strike');
+  assert.strictEqual(fakeFetch.calls[0].body.method, 'core.playback.get_state');
+  assert.strictEqual(fakeFetch.calls[1].body.method, 'core.tracklist.add');
+
+  plugin.stop();
+});
+
+test('mopidy playback reduces bell volume via the mixer during the configured night-volume-reduction hours, then restores it', async (t) => {
+  const app = makeMockApp();
+  const plugin = createPlugin(app);
+  const fakeFetch = makeFakeFetch([
+    { result: 'stopped' }, // get_state
+    { result: 80 }, // mixer.get_volume
+    { result: null }, // mixer.set_volume (duck to 40 = 80 * 0.5)
+    { result: [{ tlid: 7, track: { length: 10 } }] }, // tracklist.add
+    { result: null }, // playback.play (bell)
+    { result: null }, // tracklist.remove
+    { result: null } // mixer.set_volume (restore to 80)
+  ]);
+  plugin._setFetchForTesting(fakeFetch);
+
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: new Date('2026-06-15T22:00:00.000Z').getTime() });
+  plugin.start({
+    enabled: true,
+    watchScheme: 'traditional',
+    playbackWebapp: false,
+    playbackMopidy: true,
+    muteWhenAnchoredOrMoored: false,
+    nightVolumeEnabled: true,
+    nightVolumeStart: '00:00',
+    nightVolumeEnd: '23:59',
+    nightVolumeLevel: 50
+  });
+
+  t.mock.timers.tick(30 * 60 * 1000); // next half-hour boundary
+  await flushMicrotasks();
+
+  assert.strictEqual(fakeFetch.calls.length, 5);
+  assert.strictEqual(fakeFetch.calls[0].body.method, 'core.playback.get_state');
+  assert.strictEqual(fakeFetch.calls[1].body.method, 'core.mixer.get_volume');
+  assert.strictEqual(fakeFetch.calls[2].body.method, 'core.mixer.set_volume');
+  assert.deepStrictEqual(fakeFetch.calls[2].body.params, { volume: 40 });
+  assert.strictEqual(fakeFetch.calls[3].body.method, 'core.tracklist.add');
+  assert.strictEqual(fakeFetch.calls[4].body.method, 'core.playback.play');
+
+  t.mock.timers.tick(10 + 500); // bell duration (10ms) + the restore buffer
+  await flushMicrotasks();
+
+  assert.strictEqual(fakeFetch.calls.length, 7);
+  assert.strictEqual(fakeFetch.calls[5].body.method, 'core.tracklist.remove');
+  assert.strictEqual(fakeFetch.calls[6].body.method, 'core.mixer.set_volume');
+  assert.deepStrictEqual(fakeFetch.calls[6].body.params, { volume: 80 });
 
   plugin.stop();
 });

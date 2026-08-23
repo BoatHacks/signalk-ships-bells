@@ -231,9 +231,11 @@
       .then(function (data) {
         if (data.playedOnServerSpeaker) {
           console.log('ships-bells: test also played on server speaker');
-        } else if (data.playedOnMopidy) {
+        }
+        if (data.playedOnMopidy) {
           console.log('ships-bells: test also played on Mopidy sound server');
-        } else if (data.reason && data.reason !== 'playbackMethod is webapp-only') {
+        }
+        if (!data.playedOnServerSpeaker && data.reason && data.reason !== 'server-speaker playback is not enabled') {
           console.warn('ships-bells: server-speaker test failed -', data.reason);
         }
       })
