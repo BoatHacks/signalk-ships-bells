@@ -116,8 +116,24 @@ from this plugin's own webapp at
 `resolveMopidyAudioBaseUrl()`/`signalk-ships-bells/bells/<file>.wav` — that
 second direction is the hard one, since a non-host-networked container can't
 reach the host's own loopback, hence `mopidyAudioBaseUrl` (falls back to
-`http://localhost:<app.config.settings.port>` otherwise). No duck/resume:
-this briefly interrupts whatever Mopidy is already playing.
+`http://localhost:<app.config.settings.port>` otherwise).
+
+**Duck/resume**: `duckForBell()` checks `core.playback.get_state()` first —
+if Mopidy is `'playing'`, it captures `core.playback.get_current_tl_track()`
+(for its `tlid`) and `core.playback.get_time_position()`, then calls
+`core.playback.pause()` (the duck). The bell is *added* to the tracklist
+(not a `tracklist.clear`, unlike the first draft of this feature — clearing
+would have destroyed the track being ducked) and played via
+`core.playback.play({tlid})`. After the bell's duration (read off
+`tracklist.add`'s response, `track.length`, falling back to `5000`ms) plus a
+500ms buffer, `unduckAfterBell()` removes the bell's `tlid` from the
+tracklist via `core.tracklist.remove` and, if something was ducked, calls
+`core.playback.play({tlid: original})` followed by
+`core.playback.seek({time_position: originalMs})` to resume at the exact
+captured position. If nothing was playing (`get_state` returns anything but
+`'playing'`), `duckForBell()` returns `null` and `unduckAfterBell()` is a
+no-op — the bell just plays and gets cleaned out of the tracklist
+afterward, nothing to resume.
 
 **Per-zone targeting** (`mopidyZoneIds`, `GET`/`PUT
 .../mopidy-zones`): Mopidy has one shared stream reaching every Snapcast
@@ -169,7 +185,7 @@ zone list for the webapp), and `GET`/`PUT .../mopidy-zones` (read/write
 
 ## Test suite
 
-`npm test` runs `node --test test/*.test.js`. Currently **46 tests**. Covers:
+`npm test` runs `node --test test/*.test.js`. Currently **47 tests**. Covers:
 bell-count math for both schemes, quiet-hours/night-volume time-range math
 (including midnight wraparound and invalid-input handling), the manual UTC
 offset (`effectiveMinutesSinceMidnight`, `effectiveWatchScheme`), New Year's

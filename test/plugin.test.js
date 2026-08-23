@@ -404,12 +404,12 @@ function flushMicrotasks() {
   return new Promise((resolve) => setImmediate(resolve));
 }
 
-test('POST /test-strike with playbackMethod mopidy sends tracklist.clear, tracklist.add, playback.play in order', async () => {
+test('POST /test-strike with playbackMethod mopidy sends get_state, tracklist.add, playback.play in order, when nothing was playing', async () => {
   const app = makeMockApp();
   const plugin = createPlugin(app);
   const router = makeFakeRouter();
   plugin.registerWithRouter(router);
-  const fakeFetch = makeFakeFetch([{ result: null }, { result: [] }, { result: null }]);
+  const fakeFetch = makeFakeFetch([{ result: 'stopped' }, { result: [] }, { result: null }]);
   plugin._setFetchForTesting(fakeFetch);
   plugin.start({ enabled: true, watchScheme: 'traditional', playbackMethod: 'mopidy', muteWhenAnchoredOrMoored: true });
 
@@ -420,10 +420,55 @@ test('POST /test-strike with playbackMethod mopidy sends tracklist.clear, trackl
   assert.strictEqual(res.body.playedOnMopidy, true);
   assert.strictEqual(fakeFetch.calls.length, 3);
   assert.strictEqual(fakeFetch.calls[0].url, 'http://localhost:6680/mopidy/rpc');
-  assert.strictEqual(fakeFetch.calls[0].body.method, 'core.tracklist.clear');
+  assert.strictEqual(fakeFetch.calls[0].body.method, 'core.playback.get_state');
   assert.strictEqual(fakeFetch.calls[1].body.method, 'core.tracklist.add');
   assert.deepStrictEqual(fakeFetch.calls[1].body.params.uris, ['http://localhost:3000/signalk-ships-bells/bells/bell-strikes-8.wav']);
   assert.strictEqual(fakeFetch.calls[2].body.method, 'core.playback.play');
+
+  plugin.stop();
+});
+
+test('mopidy playback ducks and resumes a track that was already playing', async () => {
+  const app = makeMockApp();
+  const plugin = createPlugin(app);
+  const router = makeFakeRouter();
+  plugin.registerWithRouter(router);
+  const fakeFetch = makeFakeFetch([
+    { result: 'playing' }, // get_state
+    { result: { tlid: 42, track: { uri: 'https://ice6.somafm.com/groovesalad-128-mp3' } } }, // get_current_tl_track
+    { result: 12345 }, // get_time_position
+    { result: null }, // pause
+    { result: [{ tlid: 99, track: { length: 20 } }] }, // tracklist.add (bell)
+    { result: null }, // playback.play (bell)
+    { result: null }, // tracklist.remove (bell)
+    { result: null }, // playback.play (resume original)
+    { result: null } // seek
+  ]);
+  plugin._setFetchForTesting(fakeFetch);
+  plugin.start({ enabled: true, watchScheme: 'traditional', playbackMethod: 'mopidy', muteWhenAnchoredOrMoored: true });
+
+  router.routes.post['/test-strike']({}, makeFakeRes());
+  await flushMicrotasks();
+
+  assert.strictEqual(fakeFetch.calls.length, 6);
+  assert.strictEqual(fakeFetch.calls[0].body.method, 'core.playback.get_state');
+  assert.strictEqual(fakeFetch.calls[1].body.method, 'core.playback.get_current_tl_track');
+  assert.strictEqual(fakeFetch.calls[2].body.method, 'core.playback.get_time_position');
+  assert.strictEqual(fakeFetch.calls[3].body.method, 'core.playback.pause');
+  assert.strictEqual(fakeFetch.calls[4].body.method, 'core.tracklist.add');
+  assert.strictEqual(fakeFetch.calls[5].body.method, 'core.playback.play');
+  assert.deepStrictEqual(fakeFetch.calls[5].body.params, { tlid: 99 });
+
+  // Bell is 20ms + the 500ms restore buffer; wait past that for the resume.
+  await new Promise((resolve) => setTimeout(resolve, 600));
+
+  assert.strictEqual(fakeFetch.calls.length, 9);
+  assert.strictEqual(fakeFetch.calls[6].body.method, 'core.tracklist.remove');
+  assert.deepStrictEqual(fakeFetch.calls[6].body.params, { criteria: { tlid: [99] } });
+  assert.strictEqual(fakeFetch.calls[7].body.method, 'core.playback.play');
+  assert.deepStrictEqual(fakeFetch.calls[7].body.params, { tlid: 42 });
+  assert.strictEqual(fakeFetch.calls[8].body.method, 'core.playback.seek');
+  assert.deepStrictEqual(fakeFetch.calls[8].body.params, { time_position: 12345 });
 
   plugin.stop();
 });
@@ -433,7 +478,7 @@ test('mopidy playback uses configured mopidyHost/mopidyPort and mopidyAudioBaseU
   const plugin = createPlugin(app);
   const router = makeFakeRouter();
   plugin.registerWithRouter(router);
-  const fakeFetch = makeFakeFetch([{ result: null }, { result: [] }, { result: null }]);
+  const fakeFetch = makeFakeFetch([{ result: 'stopped' }, { result: [] }, { result: null }]);
   plugin._setFetchForTesting(fakeFetch);
   plugin.start({
     enabled: true,
@@ -459,7 +504,7 @@ test('mopidy audio base URL defaults from app.config.settings.port when unset', 
   const plugin = createPlugin(app);
   const router = makeFakeRouter();
   plugin.registerWithRouter(router);
-  const fakeFetch = makeFakeFetch([{ result: null }, { result: [] }, { result: null }]);
+  const fakeFetch = makeFakeFetch([{ result: 'stopped' }, { result: [] }, { result: null }]);
   plugin._setFetchForTesting(fakeFetch);
   plugin.start({ enabled: true, watchScheme: 'traditional', playbackMethod: 'mopidy', muteWhenAnchoredOrMoored: true });
 

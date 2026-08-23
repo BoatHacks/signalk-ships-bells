@@ -96,9 +96,9 @@ listens for it over the SignalK websocket and plays the matching audio file.
       server's port>` (works only with host networking), or set it to this
       Signal K server's real LAN IP otherwise. A fourth (**Snapcast control
       port**, default `1705`, signalk-jukebox's own control port) is only
-      used together with the per-zone selection below. This method briefly
-      interrupts whatever Mopidy is currently playing — there's no
-      duck/resume.
+      used together with the per-zone selection below. If Mopidy is already
+      playing something, it's paused for the strike and resumed at the same
+      position afterward, rather than losing its place.
 
       The plugin's own webapp additionally shows a **"Play bells in
       \<zone\>"** checkbox list, one per Snapcast zone currently known to

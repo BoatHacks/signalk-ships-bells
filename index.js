@@ -388,6 +388,36 @@ module.exports = function (app) {
     }
   }
 
+  // Ducking: if Mopidy is already playing something when the bell fires, its
+  // current track and exact playback position are captured, playback is
+  // paused (the "duck"), the bell is inserted into the tracklist and played
+  // on its own, and afterward the original track is resumed at the captured
+  // position (the "un-duck") - rather than clearing/replacing the tracklist
+  // outright. If nothing was playing, there's nothing to duck or resume;
+  // the bell just plays and is removed from the tracklist afterward.
+
+  async function duckForBell(host, port) {
+    const state = await mopidyRpc(host, port, 'core.playback.get_state');
+    if (state !== 'playing') {
+      return null;
+    }
+    const tlTrack = await mopidyRpc(host, port, 'core.playback.get_current_tl_track');
+    if (!tlTrack) {
+      return null;
+    }
+    const positionMs = await mopidyRpc(host, port, 'core.playback.get_time_position');
+    await mopidyRpc(host, port, 'core.playback.pause');
+    return { tlid: tlTrack.tlid, positionMs };
+  }
+
+  async function unduckAfterBell(host, port, snapshot) {
+    if (!snapshot) {
+      return;
+    }
+    await mopidyRpc(host, port, 'core.playback.play', { tlid: snapshot.tlid });
+    await mopidyRpc(host, port, 'core.playback.seek', { time_position: snapshot.positionMs });
+  }
+
   function playOnMopidy(strikes, options) {
     const host = options.mopidyHost || 'localhost';
     const port = options.mopidyPort || 6680;
@@ -396,37 +426,45 @@ module.exports = function (app) {
     const url = `${resolveMopidyAudioBaseUrl(options)}/signalk-ships-bells/bells/${bellFile(strikes)}`;
 
     (async () => {
-      let snapshot = [];
+      let zoneSnapshot = [];
       if (zoneIds.length > 0) {
         try {
-          snapshot = await muteOtherZones(host, snapPort, zoneIds);
+          zoneSnapshot = await muteOtherZones(host, snapPort, zoneIds);
         } catch (err) {
           app.error(`ships-bells: could not mute other zones: ${err.message || err}`);
         }
       }
 
+      let playbackSnapshot = null;
       try {
-        // Clears whatever Mopidy is currently playing and replaces it with
-        // the bell strike - no duck/resume. A short interruption of the
-        // jukebox's own playback, not a mix. Documented in the schema
-        // description below.
-        await mopidyRpc(host, port, 'core.tracklist.clear');
-        const added = await mopidyRpc(host, port, 'core.tracklist.add', { uris: [url] });
-        await mopidyRpc(host, port, 'core.playback.play');
+        playbackSnapshot = await duckForBell(host, port);
 
-        if (snapshot.length > 0) {
-          const track = added && added[0] && added[0].track;
-          const durationMs = (track && track.length) || 5000;
-          setTimeout(() => {
-            restoreZones(host, snapPort, snapshot).catch((err) => {
-              app.error(`ships-bells: could not restore zone mute state: ${err.message || err}`);
-            });
-          }, durationMs + 500);
-        }
+        const added = await mopidyRpc(host, port, 'core.tracklist.add', { uris: [url] });
+        const bellTlTrack = added && added[0];
+        await mopidyRpc(host, port, 'core.playback.play', bellTlTrack ? { tlid: bellTlTrack.tlid } : {});
+
+        const durationMs = (bellTlTrack && bellTlTrack.track && bellTlTrack.track.length) || 5000;
+        setTimeout(() => {
+          (async () => {
+            if (bellTlTrack) {
+              await mopidyRpc(host, port, 'core.tracklist.remove', { criteria: { tlid: [bellTlTrack.tlid] } });
+            }
+            await unduckAfterBell(host, port, playbackSnapshot);
+          })().catch((err) => {
+            app.error(`ships-bells: could not resume mopidy playback after bell: ${err.message || err}`);
+          }).finally(() => {
+            if (zoneSnapshot.length > 0) {
+              restoreZones(host, snapPort, zoneSnapshot).catch((err) => {
+                app.error(`ships-bells: could not restore zone mute state: ${err.message || err}`);
+              });
+            }
+          });
+        }, durationMs + 500);
       } catch (err) {
         app.error(`ships-bells: mopidy playback failed: ${err.message || err}`);
-        if (snapshot.length > 0) {
-          restoreZones(host, snapPort, snapshot).catch(() => {});
+        unduckAfterBell(host, port, playbackSnapshot).catch(() => {});
+        if (zoneSnapshot.length > 0) {
+          restoreZones(host, snapPort, zoneSnapshot).catch(() => {});
         }
       }
     })();
@@ -601,8 +639,9 @@ module.exports = function (app) {
           "also be in use by something else (e.g. a Snapcast client for " +
           "signalk-jukebox) at the same time. 'Mopidy sound server' sends the bell " +
           "through a Mopidy instance instead (e.g. signalk-jukebox's own container) " +
-          "- see the Mopidy fields below. It briefly interrupts whatever Mopidy is " +
-          "currently playing; there's no duck/resume.",
+          "- see the Mopidy fields below. If Mopidy is already playing something, " +
+          "it's paused (ducked) for the strike and resumed at the same position " +
+          "afterward.",
         enum: ['webapp', 'server-speaker', 'both', 'mopidy'],
         enumNames: [
           'Webapp (play in browser)',
