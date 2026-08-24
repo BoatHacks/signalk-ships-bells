@@ -26,6 +26,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   the manual UTC offset is enabled, the offset itself — row times become
   UTC clock marks with bell counts shifted to match. The current
   half-hour's row is highlighted, refreshed client-side every minute.
+  Rows within the configured quiet-hours range show strikethrough text;
+  rows within the night-volume-reduction range show subdued text (muted
+  wins if both overlap a row).
 
 ## [0.1.12] - 2026-08-24
 

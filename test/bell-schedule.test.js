@@ -285,3 +285,61 @@ test('buildBellScheduleTable forces simple-cycle and shifts bell counts by the U
   assert.strictEqual(byTime['00:30'].bells, bellCountForMinutes(90, 'simple-cycle'));
   assert.strictEqual(byTime['00:30'].bells, 3);
 });
+
+test('buildBellScheduleTable marks rows within quietHours as muted', () => {
+  const table = buildBellScheduleTable({
+    watchScheme: 'traditional',
+    quietHoursEnabled: true,
+    quietHoursStart: '22:00',
+    quietHoursEnd: '06:00'
+  });
+  const byTime = Object.fromEntries(table.rows.map((r) => [r.time, r]));
+
+  assert.strictEqual(byTime['22:00'].muted, true);
+  assert.strictEqual(byTime['02:00'].muted, true);
+  assert.strictEqual(byTime['05:30'].muted, true);
+  assert.strictEqual(byTime['06:00'].muted, false); // exclusive end
+  assert.strictEqual(byTime['12:00'].muted, false); // midday
+  assert.strictEqual(byTime['22:00'].reducedVolume, false); // muted takes priority, not both
+});
+
+test('buildBellScheduleTable marks rows within nightVolume as reducedVolume, unless quietHours already muted them', () => {
+  const table = buildBellScheduleTable({
+    watchScheme: 'traditional',
+    nightVolumeEnabled: true,
+    nightVolumeStart: '20:00',
+    nightVolumeEnd: '23:00'
+  });
+  const byTime = Object.fromEntries(table.rows.map((r) => [r.time, r]));
+
+  assert.strictEqual(byTime['20:00'].reducedVolume, true);
+  assert.strictEqual(byTime['22:30'].reducedVolume, true);
+  assert.strictEqual(byTime['23:00'].reducedVolume, false); // exclusive end
+  assert.strictEqual(byTime['12:00'].reducedVolume, false);
+  assert.ok(table.rows.every((r) => r.muted === false));
+
+  const overlapping = buildBellScheduleTable({
+    watchScheme: 'traditional',
+    quietHoursEnabled: true,
+    quietHoursStart: '21:00',
+    quietHoursEnd: '23:00',
+    nightVolumeEnabled: true,
+    nightVolumeStart: '20:00',
+    nightVolumeEnd: '23:30'
+  });
+  const overlapByTime = Object.fromEntries(overlapping.rows.map((r) => [r.time, r]));
+  // 20:00-21:00 is only in the night-volume window -> reduced.
+  assert.strictEqual(overlapByTime['20:00'].reducedVolume, true);
+  assert.strictEqual(overlapByTime['20:00'].muted, false);
+  // 21:00-23:00 is in both -> muted wins, not double-flagged as reduced too.
+  assert.strictEqual(overlapByTime['22:00'].muted, true);
+  assert.strictEqual(overlapByTime['22:00'].reducedVolume, false);
+  // 23:00-23:30 is only in the night-volume window again (quiet hours ended).
+  assert.strictEqual(overlapByTime['23:00'].muted, false);
+  assert.strictEqual(overlapByTime['23:00'].reducedVolume, true);
+});
+
+test('buildBellScheduleTable leaves muted/reducedVolume false everywhere when neither feature is enabled', () => {
+  const table = buildBellScheduleTable({ watchScheme: 'traditional' });
+  assert.ok(table.rows.every((r) => r.muted === false && r.reducedVolume === false));
+});

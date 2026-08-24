@@ -166,7 +166,12 @@ listens for it over the SignalK websocket and plays the matching audio file.
   UTC clock marks, and each one's bell count is exactly what would actually
   ring at that UTC instant, not a separate approximation. The row matching
   the current half-hour is highlighted, refreshed client-side every minute
-  without re-fetching the table.
+  without re-fetching the table. Rows within the configured quiet-hours
+  range show strikethrough text (they'd be muted); rows within the
+  night-volume-reduction range show subdued text (they'd play quieter) —
+  a row in both ranges only shows as muted, since nothing would actually
+  play at reduced volume there. Doesn't reflect the anchor/moored mute,
+  which depends on live `navigation.state`, not a fixed time.
 
 ## Recommended companion plugins
 

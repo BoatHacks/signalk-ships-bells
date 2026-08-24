@@ -130,6 +130,28 @@ table, since the row-to-bells mapping itself doesn't change minute to
 minute. The table is re-fetched (not just re-highlighted) after the watch
 scheme dropdown save succeeds, since that changes the bells themselves.
 
+Each row also carries `muted`/`reducedVolume` booleans, computed
+server-side by running the row's own clock value through
+`isWithinQuietHours()` against `quietHoursStart`/`End` and
+`nightVolumeStart`/`End` respectively — the same function
+`isMuted()`/`nightVolumeFactorForMoment()` use for a real strike, so the
+table can't drift from those either. `muted` wins if both windows overlap
+a row (checked via `!muted && ...` for `reducedVolume`) — nothing plays
+at a reduced volume in a window where nothing plays at all. The webapp
+renders `muted` as strikethrough text (`.muted-row`) and `reducedVolume`
+as subdued/dimmed text (`.reduced-row`), with a one-line legend shown
+only when at least one row actually has either flag set. Known
+imprecision, left as a documented approximation rather than fixed: this
+check runs against the row's own displayed clock value (UTC when the
+offset is enabled, local otherwise), but the real `isMuted()`/
+`nightVolumeFactorForMoment()` always evaluate against actual local
+wall-clock time regardless of the offset (their start/end fields are
+documented as ship-local time, deliberately independent of the offset,
+same as the offset is deliberately independent of the server's own
+timezone) — correct when the offset is off (the common case), an
+approximation when it's on. Doesn't cover `muteWhenAnchoredOrMoored` at
+all, since that depends on live `navigation.state`, not a fixed time.
+
 **Manual test button** (`POST /plugins/signalk-ships-bells/test-strike`):
 deliberately bypasses *all* muting and the night-volume reduction — a manual
 test should always be clearly audible. Also exercises server-speaker and/or
@@ -322,7 +344,7 @@ above).
 
 ## Test suite
 
-`npm test` runs `node --test test/*.test.js`. Currently **64 tests**. Covers:
+`npm test` runs `node --test test/*.test.js`. Currently **67 tests**. Covers:
 bell-count math for both schemes, quiet-hours/night-volume time-range math
 (including midnight wraparound and invalid-input handling), the manual UTC
 offset (`effectiveMinutesSinceMidnight`, `effectiveWatchScheme`), New Year's

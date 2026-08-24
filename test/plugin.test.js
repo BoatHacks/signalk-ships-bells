@@ -175,7 +175,10 @@ test('GET /bell-times returns the 48-row schedule table reflecting the current s
   assert.strictEqual(res.body.rows.length, 48);
   assert.strictEqual(res.body.usesUtc, true);
   assert.strictEqual(res.body.watchScheme, 'simple-cycle'); // offset forces simple-cycle
-  assert.ok(res.body.rows.every((r) => typeof r.watch === 'string' && typeof r.time === 'string' && typeof r.bells === 'number'));
+  assert.ok(res.body.rows.every((r) =>
+    typeof r.watch === 'string' && typeof r.time === 'string' && typeof r.bells === 'number' &&
+    typeof r.muted === 'boolean' && typeof r.reducedVolume === 'boolean'
+  ));
 
   plugin.stop();
 });

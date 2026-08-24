@@ -119,6 +119,23 @@ function formatHHMM(minutesSinceMidnightValue) {
 // mark, and its bell count reflects that same mark shifted by the
 // configured offset, i.e. exactly what a `Date` at that UTC instant would
 // produce if run through effectiveMinutesSinceMidnight() right now.
+// muted/reducedVolume per row reuse isWithinQuietHours() directly (below),
+// the same time-range check isMuted()/nightVolumeFactorForMoment() use at
+// a real strike -- against each row's OWN displayed clock value (local or
+// UTC, matching whichever this row's time/bells are already in terms of).
+// Known imprecision, not fixed: isMuted()/nightVolumeFactorForMoment()
+// always evaluate quiet-hours/night-volume against real LOCAL wall-clock
+// time regardless of the manual UTC offset (SPEC: quietHoursStart/End and
+// nightVolumeStart/End are documented as ship-local time, deliberately
+// independent of the offset, same as the offset itself is deliberately
+// independent of the server's local timezone). When the offset is
+// enabled, this table's rows are UTC clock marks, so muted/reducedVolume
+// here reflect "if this were the local clock reading" rather than the
+// real local-time evaluation -- correct when the offset is off (the
+// overwhelmingly common case), an approximation when it's on. Doesn't
+// cover muteWhenAnchoredOrMoored at all -- that depends on live
+// navigation.state, not a fixed time, so there's nothing a static table
+// can show for it.
 function buildBellScheduleTable(options) {
   const scheme = effectiveWatchScheme(options);
   const usesUtc = !!options.utcOffsetEnabled;
@@ -128,10 +145,16 @@ function buildBellScheduleTable(options) {
   for (let mark = 30; mark <= 1440; mark += 30) {
     const clockMinutes = mark % 1440;
     const effectiveMinutes = usesUtc ? (clockMinutes + offset + 1440) % 1440 : clockMinutes;
+    const muted = !!options.quietHoursEnabled &&
+      isWithinQuietHours(clockMinutes, options.quietHoursStart, options.quietHoursEnd);
+    const reducedVolume = !muted && !!options.nightVolumeEnabled &&
+      isWithinQuietHours(clockMinutes, options.nightVolumeStart, options.nightVolumeEnd);
     rows.push({
       watch: watchNameForUnwrappedMark(mark),
       time: formatHHMM(clockMinutes),
-      bells: bellCountForMinutes(effectiveMinutes, scheme)
+      bells: bellCountForMinutes(effectiveMinutes, scheme),
+      muted,
+      reducedVolume
     });
   }
 

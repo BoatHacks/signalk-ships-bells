@@ -248,9 +248,20 @@
   function renderBellTimes(data) {
     bellTimesRows = data.rows || [];
     bellTimesUsesUtc = !!data.usesUtc;
-    bellTimesStatus.textContent = bellTimesUsesUtc
-      ? 'Manual UTC offset is enabled - times below are UTC clock times.'
-      : '';
+
+    var notes = [];
+    if (bellTimesUsesUtc) {
+      notes.push('Manual UTC offset is enabled - times below are UTC clock times.');
+    }
+    var hasMuted = bellTimesRows.some(function (r) { return r.muted; });
+    var hasReduced = bellTimesRows.some(function (r) { return r.reducedVolume; });
+    if (hasMuted || hasReduced) {
+      var legend = [];
+      if (hasReduced) legend.push('subdued text = reduced volume');
+      if (hasMuted) legend.push('strikethrough = muted');
+      notes.push(legend.join(', ') + '.');
+    }
+    bellTimesStatus.textContent = notes.join(' ');
 
     bellTimesBody.innerHTML = '';
     var lastWatch = null;
@@ -258,6 +269,11 @@
     bellTimesRows.forEach(function (row) {
       var tr = document.createElement('tr');
       tr.dataset.time = row.time;
+      if (row.muted) {
+        tr.classList.add('muted-row');
+      } else if (row.reducedVolume) {
+        tr.classList.add('reduced-row');
+      }
 
       if (row.watch !== lastWatch) {
         var watchCell = document.createElement('td');
