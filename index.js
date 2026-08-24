@@ -73,6 +73,71 @@ function effectiveWatchScheme(options) {
   return options.utcOffsetEnabled ? 'simple-cycle' : options.watchScheme;
 }
 
+// ---- Bell schedule reference table (public/ webapp) ----------------------
+//
+// Full 48-half-hour-mark table, same shape as Wikipedia's "Ship's bell"
+// reference table (https://en.wikipedia.org/wiki/Ship%27s_bell): the
+// traditional seven watches, each with its own half-hour marks and bell
+// count. Reuses bellCountForMinutes/effectiveWatchScheme directly rather
+// than re-deriving the schedule, so this can never drift from what
+// actually rings.
+//
+// Each watch owns the half-hour marks strictly AFTER its own nominal start
+// and up to and including its own end -- the "N bells" mark that concludes
+// it -- not the marks starting at its own beginning (those belong to the
+// PRECEDING watch's own final bells). Concretely: midnight (00:00) is the
+// First Watch's own closing "eight bells" from the day before wrapping
+// around, not the Middle Watch's opening mark -- matches the real
+// convention (eight bells always signals the END of a watch) and is why
+// the loop below runs marks 30..1440 (not 0..1410) and looks the watch up
+// by the UNWRAPPED mark, only wrapping mod 1440 afterward for the
+// displayed clock time.
+const WATCHES = [
+  { name: 'Middle Watch', start: 0, end: 240 },
+  { name: 'Morning Watch', start: 240, end: 480 },
+  { name: 'Forenoon Watch', start: 480, end: 720 },
+  { name: 'Afternoon Watch', start: 720, end: 960 },
+  { name: 'First Dog Watch', start: 960, end: 1080 },
+  { name: 'Last Dog Watch', start: 1080, end: 1200 },
+  { name: 'First Watch', start: 1200, end: 1440 }
+];
+
+function watchNameForUnwrappedMark(unwrappedMinutes) {
+  const watch = WATCHES.find((w) => unwrappedMinutes > w.start && unwrappedMinutes <= w.end);
+  return watch ? watch.name : WATCHES[WATCHES.length - 1].name;
+}
+
+function formatHHMM(minutesSinceMidnightValue) {
+  const h = Math.floor(minutesSinceMidnightValue / 60);
+  const m = minutesSinceMidnightValue % 60;
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+}
+
+// usesUtc/offset mirror effectiveMinutesSinceMidnight()'s own logic exactly
+// (SPEC: the manual UTC offset is UTC-based, not local-wall-clock-based) --
+// when the offset is enabled, each row's displayed time is a UTC clock
+// mark, and its bell count reflects that same mark shifted by the
+// configured offset, i.e. exactly what a `Date` at that UTC instant would
+// produce if run through effectiveMinutesSinceMidnight() right now.
+function buildBellScheduleTable(options) {
+  const scheme = effectiveWatchScheme(options);
+  const usesUtc = !!options.utcOffsetEnabled;
+  const offset = options.utcOffsetMinutes || 0;
+  const rows = [];
+
+  for (let mark = 30; mark <= 1440; mark += 30) {
+    const clockMinutes = mark % 1440;
+    const effectiveMinutes = usesUtc ? (clockMinutes + offset + 1440) % 1440 : clockMinutes;
+    rows.push({
+      watch: watchNameForUnwrappedMark(mark),
+      time: formatHHMM(clockMinutes),
+      bells: bellCountForMinutes(effectiveMinutes, scheme)
+    });
+  }
+
+  return { rows, usesUtc, watchScheme: scheme };
+}
+
 // ---- Quiet-hours calculation --------------------------------------------
 //
 // Also pulled out to module scope so the test suite can exercise it directly.
@@ -558,16 +623,24 @@ module.exports = function (app) {
   // renamed or custom-built Alerts-equivalent stream is still visible in
   // logs.
 
-  function playOnAlerts(strikes, options) {
+  function playOnAlerts(strikes, options, volumeFactor) {
     const alertsSettings = options.alertsSettings || {};
     const host = options.snapcastHost || 'localhost';
     const port = alertsSettings.alertsPort || 4953;
     const streamName = alertsSettings.alertsStreamName || 'Alerts';
+    const factor = typeof volumeFactor === 'number' ? volumeFactor : 1;
 
     app.debug(`ships-bells: streaming into Snapcast stream "${streamName}" at ${host}:${port}`);
     const socket = alertsConnectImpl(port, host);
+    // Applies the same night-volume reduction webapp/Mopidy playback get,
+    // via ffmpeg's own volume filter (a plain linear multiplier, same
+    // 0-1 factor nightVolumeFactorForMoment() already produces elsewhere)
+    // -- skipped entirely outside the reduced-volume window (factor >= 1)
+    // to avoid the filter's re-encode overhead when it wouldn't change
+    // anything, same as playOnMopidy's own early-out for the same case.
     const ffmpeg = spawnImpl('ffmpeg', [
       '-i', bellFilePath(strikes),
+      ...(factor < 1 ? ['-af', `volume=${factor}`] : []),
       '-ar', '48000',
       '-ac', '2',
       '-sample_fmt', 's16',
@@ -659,7 +732,7 @@ module.exports = function (app) {
     }
 
     if (alerts) {
-      playOnAlerts(strikes, options);
+      playOnAlerts(strikes, options, volumeFactor);
     }
   }
 
@@ -947,10 +1020,12 @@ module.exports = function (app) {
         title: 'Reduce volume during a time range',
         description:
           "For when you don't want to mute the bell entirely, just have it quieter " +
-          "overnight. Affects webapp playback (browser volume) and Mopidy playback " +
-          "(Mopidy's own mixer volume, restored afterward) - play-sound doesn't " +
-          "offer a portable way to control server-speaker output volume, so that " +
-          "always plays at full volume regardless of this setting.",
+          "overnight. Affects webapp playback (browser volume), Mopidy playback " +
+          "(Mopidy's own mixer volume, restored afterward), and Alerts stream " +
+          "playback (scaled into the ffmpeg resample via its volume filter) - " +
+          "play-sound doesn't offer a portable way to control server-speaker " +
+          "output volume, so that always plays at full volume regardless of this " +
+          "setting.",
         default: false
       },
       nightVolumeStart: {
@@ -990,6 +1065,15 @@ module.exports = function (app) {
           label: schemeSchema.enumNames[i]
         }))
       });
+    });
+
+    // Backs the webapp's reference table (like Wikipedia's Ship's bell
+    // page), reflecting the current effective schedule -- including the
+    // manual UTC offset, if enabled (SPEC: forces simple-cycle and shifts
+    // every row's bell count by the configured offset, same as a live
+    // strike would get).
+    router.get('/bell-times', (req, res) => {
+      res.json(buildBellScheduleTable(currentOptions));
     });
 
     router.put('/schedule', (req, res) => {
@@ -1292,3 +1376,4 @@ module.exports.nightVolumeFactorForMoment = nightVolumeFactorForMoment;
 module.exports.minutesSinceMidnightUTC = minutesSinceMidnightUTC;
 module.exports.effectiveMinutesSinceMidnight = effectiveMinutesSinceMidnight;
 module.exports.effectiveWatchScheme = effectiveWatchScheme;
+module.exports.buildBellScheduleTable = buildBellScheduleTable;

@@ -124,6 +124,7 @@
       .then(function () {
         scheduleStatus.textContent = 'Saved.';
         setTimeout(function () { scheduleStatus.textContent = ''; }, 2000);
+        loadBellTimes(); // the reference table's bell counts depend on the scheme
       })
       .catch(function (err) {
         scheduleStatus.textContent = err.statusText || 'Failed to save - try again.';
@@ -199,6 +200,113 @@
   }
 
   loadMopidyZones();
+
+  // ---- Bell schedule reference table (like Wikipedia's Ship's bell page) --
+  var bellTimesStatus = document.getElementById('bell-times-status');
+  var bellTimesBody = document.getElementById('bell-times-body');
+  var bellTimesRows = []; // cached {watch, time, bells} from the last fetch
+  var bellTimesUsesUtc = false;
+  var highlightTimer = null;
+
+  function bellPattern(n) {
+    // A dot per bell, grouped in pairs with a gap between pairs (a plain-
+    // text approximation of the paired "ding-ding" strike pattern the
+    // Wikipedia table itself uses dots for) -- a lone trailing bell (odd
+    // counts) stands alone, same as it actually rings.
+    var groups = [];
+    var remaining = n;
+    while (remaining >= 2) {
+      groups.push('●●');
+      remaining -= 2;
+    }
+    if (remaining === 1) {
+      groups.push('●');
+    }
+    return groups.join(' ');
+  }
+
+  function currentRowTime() {
+    // The table's row times are UTC clock marks when the manual offset is
+    // enabled (buildBellScheduleTable's own convention, matching what
+    // effectiveMinutesSinceMidnight() actually reads), local wall-clock
+    // marks otherwise -- match whichever this browser's own clock should
+    // be compared against so "now" highlights the right row.
+    var now = new Date();
+    var h = bellTimesUsesUtc ? now.getUTCHours() : now.getHours();
+    var m = bellTimesUsesUtc ? now.getUTCMinutes() : now.getMinutes();
+    var halfHour = m < 30 ? 0 : 30;
+    return String(h).padStart(2, '0') + ':' + String(halfHour).padStart(2, '0');
+  }
+
+  function highlightCurrentRow() {
+    var target = currentRowTime();
+    Array.prototype.forEach.call(bellTimesBody.children, function (row) {
+      row.classList.toggle('current-row', row.dataset.time === target);
+    });
+  }
+
+  function renderBellTimes(data) {
+    bellTimesRows = data.rows || [];
+    bellTimesUsesUtc = !!data.usesUtc;
+    bellTimesStatus.textContent = bellTimesUsesUtc
+      ? 'Manual UTC offset is enabled - times below are UTC clock times.'
+      : '';
+
+    bellTimesBody.innerHTML = '';
+    var lastWatch = null;
+    var lastWatchCell = null;
+    bellTimesRows.forEach(function (row) {
+      var tr = document.createElement('tr');
+      tr.dataset.time = row.time;
+
+      if (row.watch !== lastWatch) {
+        var watchCell = document.createElement('td');
+        watchCell.className = 'watch-name';
+        watchCell.textContent = row.watch;
+        watchCell.rowSpan = 1;
+        tr.appendChild(watchCell);
+        lastWatch = row.watch;
+        lastWatchCell = watchCell;
+      } else if (lastWatchCell) {
+        lastWatchCell.rowSpan += 1;
+      }
+
+      var timeCell = document.createElement('td');
+      timeCell.textContent = row.time;
+      tr.appendChild(timeCell);
+
+      var bellsCell = document.createElement('td');
+      bellsCell.className = 'bells';
+      bellsCell.textContent = bellPattern(row.bells) + ' (' + row.bells + ')';
+      tr.appendChild(bellsCell);
+
+      bellTimesBody.appendChild(tr);
+    });
+
+    highlightCurrentRow();
+  }
+
+  function loadBellTimes() {
+    fetch(API_BASE + '/bell-times', { headers: authHeaders() })
+      .then(function (res) {
+        if (!res.ok) {
+          var err = new Error('status ' + res.status);
+          err.statusText = statusTextForResponse(res, 'load the bell schedule table');
+          throw err;
+        }
+        return res.json();
+      })
+      .then(renderBellTimes)
+      .catch(function (err) {
+        bellTimesStatus.textContent = err.statusText || 'Could not load the bell schedule table.';
+        console.warn('ships-bells: failed to load bell times', err);
+      });
+  }
+
+  loadBellTimes();
+  // Re-check every minute which row is "now" -- purely a client-side
+  // highlight, no need to re-fetch the table itself for this.
+  highlightTimer = setInterval(highlightCurrentRow, 60 * 1000);
 
   var NOTIFICATION_PATH = 'notifications.plugins.signalkShipsBell.strike';
   var BELLS_BASE_URL = 'bells/';

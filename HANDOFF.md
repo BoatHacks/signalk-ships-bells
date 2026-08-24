@@ -94,7 +94,41 @@ forced to `simple-cycle` via `effectiveWatchScheme()` whenever the offset is
 enabled — the `traditional` scheme's dog-watch reset is tied to real
 second-dog-watch clock time, which an arbitrary offset would no longer line
 up with. This is a runtime override only; the stored `watchScheme` option
-itself is untouched.
+itself is untouched. `utcOffsetEnabled`/`utcOffsetMinutes` ARE now read by
+the webapp indirectly, via `GET /bell-times` (below) — not exposed as a
+webapp control of their own, just reflected in the reference table.
+
+**Bell schedule reference table** (`buildBellScheduleTable()`, `GET
+/plugins/signalk-ships-bells/bell-times`): a 48-row table, one row per
+half-hour mark, laid out like Wikipedia's Ship's bell page — same seven
+traditional watches (`WATCHES`, module scope), each row's `watch`/`time`/
+`bells`. Reuses `bellCountForMinutes()`/`effectiveWatchScheme()` directly
+(never re-derives the schedule, so it can't drift from what actually
+rings). Watch-name boundaries are `(start, end]`, not `[start, end)` —
+each watch owns the half-hour marks strictly after its own nominal start
+up through its own end (the "eight bells" mark that concludes it), so
+midnight (`00:00`) belongs to the First Watch (closing it out from the
+day before), not the Middle Watch (which starts at `00:30`). That's why
+the generating loop runs raw marks `30..1440` (not `0..1410`) and looks
+the watch up by the *unwrapped* mark, only wrapping mod 1440 afterward for
+the displayed clock time — using the wrapped value for the watch lookup
+would put midnight in the wrong watch.
+
+When the manual UTC offset is enabled, `usesUtc: true` and each row's
+`time` is a UTC clock mark rather than local wall-clock — its `bells`
+value is that same mark run through the identical `(minutes + offset +
+1440) % 1440` shift `effectiveMinutesSinceMidnight()` itself uses, so the
+table is never a separate approximation of the schedule, just the same
+computation tabulated in advance. The webapp (`app.js`) renders this with
+per-watch `rowSpan` grouping (merges consecutive same-watch rows into one
+cell, matching Wikipedia's own table layout), a bell count shown both as a
+number and as a dot pattern (`bellPattern()`: pairs of `●●` with a
+trailing lone `●` for odd counts), and highlights whichever row matches
+"now" — compared in UTC or local time depending on `usesUtc`, re-checked
+client-side every 60s (`highlightCurrentRow()`) without re-fetching the
+table, since the row-to-bells mapping itself doesn't change minute to
+minute. The table is re-fetched (not just re-highlighted) after the watch
+scheme dropdown save succeeds, since that changes the bells themselves.
 
 **Manual test button** (`POST /plugins/signalk-ships-bells/test-strike`):
 deliberately bypasses *all* muting and the night-volume reduction — a manual
@@ -212,7 +246,13 @@ stdout directly into the socket (`ffmpeg.stdout.pipe(socket)`) - no temp
 file. Confirmed end-to-end against a real signalk-jukebox instance: a real
 `bell-strikes-8.wav` streamed through this exact invocation played for its
 full, correct 12.78s (Snapserver's own `PcmStream` state transitions,
-`idle → playing → idle`, matched that duration precisely). Requires ffmpeg
+`idle → playing → idle`, matched that duration precisely). Night-volume
+reduction is applied here too via an `-af volume=<factor>` ffmpeg arg
+(same 0-1 `volumeFactor` `playOnMopidy` gets, added when originally
+missing entirely from this function's signature — silently no-op'd for
+Alerts even though the schema description claimed otherwise), added only
+when `factor < 1` to skip the filter's re-encode overhead outside the
+reduced-volume window. Requires ffmpeg
 installed on this machine - same kind of external-binary requirement as
 server-speaker's play-sound/mpg123/aplay. No duck/resume needed here (unlike
 `playOnMopidy`): the Alerts stream is entirely separate from whatever's
@@ -261,8 +301,10 @@ webapp, not just the admin config UI), `GET`/`PUT .../offset` (read/write
 `utcOffsetEnabled`/`utcOffsetMinutes`; PUT supports partial updates — either
 field or both; not used by the webapp, for external tooling), `POST
 .../test-strike` (see above), `GET .../zones` (proxies signalk-jukebox's own
-zone list for the webapp), and `GET`/`PUT .../mopidy-zones` (read/write
-`mopidyZoneIds`, the webapp's per-zone checkbox selection).
+zone list for the webapp), `GET`/`PUT .../mopidy-zones` (read/write
+`mopidyZoneIds`, the webapp's per-zone checkbox selection), and `GET
+.../bell-times` (the reference table, see "Bell schedule reference table"
+above).
 
 **Testing quirks worth knowing** (both discovered the hard way):
 - `play-sound` will find and use *real* system audio players (this sandbox
@@ -280,7 +322,7 @@ zone list for the webapp), and `GET`/`PUT .../mopidy-zones` (read/write
 
 ## Test suite
 
-`npm test` runs `node --test test/*.test.js`. Currently **55 tests**. Covers:
+`npm test` runs `node --test test/*.test.js`. Currently **64 tests**. Covers:
 bell-count math for both schemes, quiet-hours/night-volume time-range math
 (including midnight wraparound and invalid-input handling), the manual UTC
 offset (`effectiveMinutesSinceMidnight`, `effectiveWatchScheme`), New Year's
@@ -300,8 +342,13 @@ fire from one strike, and that Mopidy's mixer volume is ducked/restored
 during the configured night-volume-reduction hours. Also covers Alerts
 playback (`_setSpawnForTesting`/`_setAlertsConnectForTesting`): the ffmpeg
 resampling args and the bytes piped into the Alerts connection, configured
-`snapcastHost`/`alertsPort`, and a failed ffmpeg spawn logged via
-`app.error` rather than thrown; and that `snapcastHost` (not `mopidyHost`)
+`snapcastHost`/`alertsPort`, a failed ffmpeg spawn logged via `app.error`
+rather than thrown, and (added when the gap was found — `playOnAlerts`
+wasn't receiving `volumeFactor` at all, so night-volume reduction silently
+did nothing for Alerts playback even though its own schema description
+claimed it applied everywhere but server-speaker) that an `-af
+volume=<factor>` ffmpeg arg appears during the reduced-volume window and
+is absent outside it; and that `snapcastHost` (not `mopidyHost`)
 is what `muteOtherZones` actually connects to, using a fake
 `net.createConnection`-shaped socket (`makeFakeSnapSocket()`) that answers
 `Server.GetStatus`/`Client.SetVolume` over the same raw newline-JSON wire

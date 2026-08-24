@@ -9,7 +9,8 @@ const {
   nightVolumeFactorForMoment,
   minutesSinceMidnightUTC,
   effectiveMinutesSinceMidnight,
-  effectiveWatchScheme
+  effectiveWatchScheme,
+  buildBellScheduleTable
 } = require('../index.js');
 
 test('simple-cycle cycles 1-8 every 4 hours all day, including through the second dog watch', () => {
@@ -230,4 +231,57 @@ test('nightVolumeFactorForMoment clamps an out-of-range level to 0-100', () => {
     }),
     0
   );
+});
+
+test('buildBellScheduleTable has 48 rows, one per half-hour mark, in order starting at 00:30', () => {
+  const table = buildBellScheduleTable({ watchScheme: 'traditional' });
+  assert.strictEqual(table.rows.length, 48);
+  assert.strictEqual(table.rows[0].time, '00:30');
+  assert.strictEqual(table.rows[47].time, '00:00'); // wraps: mark 1440 -> 00:00
+  assert.strictEqual(table.usesUtc, false);
+  assert.strictEqual(table.watchScheme, 'traditional');
+});
+
+test('buildBellScheduleTable groups rows into the seven traditional watches, midnight belonging to the First Watch', () => {
+  const table = buildBellScheduleTable({ watchScheme: 'traditional' });
+  const byTime = Object.fromEntries(table.rows.map((r) => [r.time, r]));
+
+  assert.strictEqual(byTime['00:30'].watch, 'Middle Watch');
+  assert.strictEqual(byTime['04:00'].watch, 'Middle Watch');
+  assert.strictEqual(byTime['04:30'].watch, 'Morning Watch');
+  assert.strictEqual(byTime['08:00'].watch, 'Morning Watch');
+  assert.strictEqual(byTime['12:00'].watch, 'Forenoon Watch');
+  assert.strictEqual(byTime['16:00'].watch, 'Afternoon Watch');
+  assert.strictEqual(byTime['16:30'].watch, 'First Dog Watch');
+  assert.strictEqual(byTime['18:00'].watch, 'First Dog Watch');
+  assert.strictEqual(byTime['18:30'].watch, 'Last Dog Watch');
+  assert.strictEqual(byTime['20:00'].watch, 'Last Dog Watch');
+  assert.strictEqual(byTime['20:30'].watch, 'First Watch');
+  assert.strictEqual(byTime['00:00'].watch, 'First Watch'); // midnight closes the First Watch
+});
+
+test('buildBellScheduleTable matches bellCountForMinutes exactly, per row, with no offset', () => {
+  const table = buildBellScheduleTable({ watchScheme: 'traditional' });
+  for (const row of table.rows) {
+    const [h, m] = row.time.split(':').map(Number);
+    const minutes = h * 60 + m;
+    assert.strictEqual(row.bells, bellCountForMinutes(minutes, 'traditional'), `mismatch @ ${row.time}`);
+  }
+});
+
+test('buildBellScheduleTable forces simple-cycle and shifts bell counts by the UTC offset when enabled', () => {
+  const table = buildBellScheduleTable({
+    watchScheme: 'traditional', // ignored -- offset forces simple-cycle
+    utcOffsetEnabled: true,
+    utcOffsetMinutes: 60
+  });
+
+  assert.strictEqual(table.usesUtc, true);
+  assert.strictEqual(table.watchScheme, 'simple-cycle');
+
+  const byTime = Object.fromEntries(table.rows.map((r) => [r.time, r]));
+  // Row "00:30" is a UTC clock mark; shifted +60min it's effectively
+  // 01:30 in the schedule, which simple-cycle counts as 3 bells.
+  assert.strictEqual(byTime['00:30'].bells, bellCountForMinutes(90, 'simple-cycle'));
+  assert.strictEqual(byTime['00:30'].bells, 3);
 });

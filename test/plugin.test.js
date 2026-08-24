@@ -156,6 +156,30 @@ test('GET /schedule returns the current watch scheme and the full option list', 
   plugin.stop();
 });
 
+test('GET /bell-times returns the 48-row schedule table reflecting the current scheme and offset', () => {
+  const app = makeMockApp();
+  const plugin = createPlugin(app);
+  const router = makeFakeRouter();
+  plugin.registerWithRouter(router);
+  plugin.start({
+    enabled: true,
+    watchScheme: 'traditional',
+    utcOffsetEnabled: true,
+    utcOffsetMinutes: 90,
+    muteWhenAnchoredOrMoored: true
+  });
+
+  const res = makeFakeRes();
+  router.routes.get['/bell-times']({}, res);
+
+  assert.strictEqual(res.body.rows.length, 48);
+  assert.strictEqual(res.body.usesUtc, true);
+  assert.strictEqual(res.body.watchScheme, 'simple-cycle'); // offset forces simple-cycle
+  assert.ok(res.body.rows.every((r) => typeof r.watch === 'string' && typeof r.time === 'string' && typeof r.bells === 'number'));
+
+  plugin.stop();
+});
+
 test('PUT /schedule rejects an invalid scheme with 400 and does not call savePluginOptions', () => {
   const app = makeMockApp();
   let saveCalled = false;
@@ -828,6 +852,67 @@ test('alerts playback uses configured snapcastHost/alertsPort', async () => {
 
   assert.strictEqual(connectCalls[0].host, '192.168.1.50');
   assert.strictEqual(connectCalls[0].port, 9999);
+
+  plugin.stop();
+});
+
+test('alerts playback applies the night-volume reduction via an ffmpeg volume filter, on a real strike (not the bypassed /test-strike path)', async (t) => {
+  const app = makeMockApp();
+  const plugin = createPlugin(app);
+
+  const fakeSpawn = makeFakeSpawn();
+  const socket = makeFakeAlertsSocket();
+  plugin._setSpawnForTesting(fakeSpawn);
+  plugin._setAlertsConnectForTesting(() => socket);
+
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: new Date('2026-06-15T22:00:00.000Z').getTime() });
+  plugin.start({
+    enabled: true,
+    watchScheme: 'traditional',
+    playbackWebapp: false,
+    playbackAlerts: true,
+    muteWhenAnchoredOrMoored: false,
+    nightVolumeEnabled: true,
+    nightVolumeStart: '00:00',
+    nightVolumeEnd: '23:59',
+    nightVolumeLevel: 50
+  });
+
+  t.mock.timers.tick(30 * 60 * 1000); // next half-hour boundary
+  await flushMicrotasks();
+
+  assert.strictEqual(fakeSpawn.calls.length, 1);
+  const args = fakeSpawn.calls[0].args;
+  assert.ok(args.includes('-af'), 'expected an -af volume filter during the reduced-volume window');
+  assert.strictEqual(args[args.indexOf('-af') + 1], 'volume=0.5');
+
+  plugin.stop();
+});
+
+test('alerts playback skips the volume filter outside the reduced-volume window', async (t) => {
+  const app = makeMockApp();
+  const plugin = createPlugin(app);
+
+  const fakeSpawn = makeFakeSpawn();
+  const socket = makeFakeAlertsSocket();
+  plugin._setSpawnForTesting(fakeSpawn);
+  plugin._setAlertsConnectForTesting(() => socket);
+
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: new Date('2026-06-15T22:00:00.000Z').getTime() });
+  plugin.start({
+    enabled: true,
+    watchScheme: 'traditional',
+    playbackWebapp: false,
+    playbackAlerts: true,
+    muteWhenAnchoredOrMoored: false,
+    nightVolumeEnabled: false
+  });
+
+  t.mock.timers.tick(30 * 60 * 1000);
+  await flushMicrotasks();
+
+  assert.strictEqual(fakeSpawn.calls.length, 1);
+  assert.ok(!fakeSpawn.calls[0].args.includes('-af'));
 
   plugin.stop();
 });

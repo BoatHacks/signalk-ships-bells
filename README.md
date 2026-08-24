@@ -54,10 +54,12 @@ listens for it over the SignalK websocket and plays the matching audio file.
     wanted, just quieter. Same `HH:MM` start/end shape as above (independent
     of it — different range if you want), plus a reduced volume level (%).
     Affects webapp playback (browser volume, applied on top of whatever the
-    webapp's own volume slider is set to) and Mopidy playback (Mopidy's own
-    mixer volume, restored to whatever it was afterward); server-speaker
-    playback via `play-sound` doesn't offer a portable way to control output
-    volume, so it always plays at full volume regardless of this setting.
+    webapp's own volume slider is set to), Mopidy playback (Mopidy's own
+    mixer volume, restored to whatever it was afterward), and Alerts stream
+    playback (scaled into the ffmpeg resample via its volume filter);
+    server-speaker playback via `play-sound` doesn't offer a portable way to
+    control output volume, so it always plays at full volume regardless of
+    this setting.
   - **Playback outputs** — four independent checkboxes, grouped together at
     the top of the admin config screen (any combination can be on at once),
     with a note that each one's detail settings are further down; each
@@ -150,7 +152,21 @@ listens for it over the SignalK websocket and plays the matching audio file.
   /plugins/signalk-ships-bells/offset` reads/writes `utcOffsetEnabled` and
   `utcOffsetMinutes` (0–240), for external tooling that wants to set the
   offset without the admin config UI. `PUT` supports partial updates (send
-  either field, or both). Not used by the bundled webapp.
+  either field, or both). Not used by the bundled webapp's own UI, but read
+  by its bell-schedule reference table (below).
+- **Bell schedule reference table** — a collapsible "Bell schedule
+  reference" section in the webapp, backed by `GET
+  /plugins/signalk-ships-bells/bell-times`, laid out like [Wikipedia's
+  Ship's bell page](https://en.wikipedia.org/wiki/Ship%27s_bell): the seven
+  traditional watches (Middle, Morning, Forenoon, Afternoon, First Dog,
+  Last Dog, First/Evening), all 48 half-hour marks, and the bell count at
+  each (shown both as a number and as a dot pattern, e.g. `●● ●● ●` for
+  five bells). Reflects the currently selected watch scheme, and — if the
+  manual UTC offset above is enabled — the offset itself: row times become
+  UTC clock marks, and each one's bell count is exactly what would actually
+  ring at that UTC instant, not a separate approximation. The row matching
+  the current half-hour is highlighted, refreshed client-side every minute
+  without re-fetching the table.
 
 ## Recommended companion plugins
 

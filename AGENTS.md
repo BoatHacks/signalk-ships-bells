@@ -19,7 +19,12 @@ BoatHacks/signalk-ships-bells (renamed from the singular
 - Playback via a companion webapp (`public/index.html` + `app.js`) connecting
   to the SignalK websocket, subscribing to a strike notification, playing the
   matching audio file; volume slider and mute toggle persisted in
-  localStorage.
+  localStorage. Also shows a collapsible bell-schedule reference table (like
+  Wikipedia's Ship's bell page: the seven traditional watches, all 48
+  half-hour marks, bell count per mark), backed by `GET /bell-times`
+  (`buildBellScheduleTable()`) — reflects the current watch scheme and, if
+  the manual UTC offset is enabled, the offset itself (row times become UTC
+  clock marks, exactly matching what actually rings).
 - Four independent playback checkboxes, grouped under one "Playback outputs"
   admin-config subsection (`playbackWebapp`, `playbackServerSpeaker`,
   `playbackMopidy`, `playbackAlerts` - any combination), each with its own

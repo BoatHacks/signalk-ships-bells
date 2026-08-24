@@ -140,6 +140,54 @@
       color: #b9c3d9;
       margin-top: 0.4rem;
     }
+    #bell-times-details {
+      margin: 1rem 0;
+      background: var(--navy-light);
+      padding: 0.75rem 1rem;
+      border-radius: 8px;
+    }
+    #bell-times-details summary {
+      font-size: 0.9rem;
+      color: var(--gold);
+      cursor: pointer;
+    }
+    #bell-times-status {
+      font-size: 0.8rem;
+      color: #b9c3d9;
+      margin-top: 0.5rem;
+    }
+    #bell-times-table {
+      width: 100%;
+      margin-top: 0.6rem;
+      border-collapse: collapse;
+      font-size: 0.85rem;
+    }
+    #bell-times-table th {
+      text-align: left;
+      color: #b9c3d9;
+      font-weight: 600;
+      padding: 0.3rem 0.4rem;
+      border-bottom: 1px solid var(--gold-dim);
+    }
+    #bell-times-table td {
+      padding: 0.25rem 0.4rem;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+      vertical-align: top;
+    }
+    #bell-times-table td.watch-name {
+      color: var(--gold-dim);
+      white-space: nowrap;
+    }
+    #bell-times-table td.bells {
+      letter-spacing: 0.15em;
+    }
+    #bell-times-table tr.current-row td {
+      background: rgba(236, 170, 37, 0.18);
+      color: #fff;
+    }
+    #bell-times-table tr.current-row td.watch-name {
+      color: var(--gold);
+    }
   </style>
 </head>
 <body>
@@ -163,6 +211,16 @@
     <div id="mopidy-zones-list"></div>
     <div id="mopidy-zones-status"></div>
   </fieldset>
+  <details id="bell-times-details">
+    <summary>Bell schedule reference</summary>
+    <div id="bell-times-status"></div>
+    <table id="bell-times-table">
+      <thead>
+        <tr><th>Watch</th><th>Time</th><th>Bells</th></tr>
+      </thead>
+      <tbody id="bell-times-body"></tbody>
+    </table>
+  </details>
   <button id="test-button">Play test bell (8 bells)</button>
   <audio id="bell-audio"></audio>
   <script src="app.js"></script>
