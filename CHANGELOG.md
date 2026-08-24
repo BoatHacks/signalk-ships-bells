@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.1.13] - 2026-08-24
+
 ### Fixed
 
 - Night-volume reduction now applies to Alerts stream playback too — it
