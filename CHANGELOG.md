@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- A central "all bells muted" gate, independent of the existing
+  config-driven mute conditions (anchor/moored, quiet hours): any other
+  plugin or automation can mute/unmute every strike directly, via a
+  SignalK PUT to `plugins.signalkShipsBell.muted` (context `vessels.self`)
+  or the equivalent `GET`/`PUT /plugins/signalk-ships-bells/muted` REST
+  route — both share one state and publish the same delta. Deliberately
+  not persisted: it always resets to unmuted on a plugin/server restart.
+  Like the other mute reasons, the manual test button ignores it.
+
 ## [0.1.13] - 2026-08-24
 
 ### Fixed

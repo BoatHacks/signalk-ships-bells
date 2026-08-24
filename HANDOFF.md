@@ -63,14 +63,39 @@ via `scheduleLongTimeout()`, which chunks long delays into safe 20-day hops.
 **If you add any other long-delay scheduling, use `scheduleLongTimeout`, not
 a raw `setTimeout`.**
 
-**Muting**: two independent, combinable mute conditions, checked in
-`isMuted(options)`:
+**Muting**: two independent, combinable, config-driven mute conditions,
+checked in `isMuted(options)`:
 1. `muteWhenAnchoredOrMoored` — checks `navigation.state` via
    `app.streambundle.getSelfStream('navigation.state')`. Depends on something
    populating that path (README recommends `signalk-autostate`).
 2. `quietHoursEnabled` + `quietHoursStart`/`quietHoursEnd` — a `HH:MM` time
    range via `isWithinQuietHours()`, which correctly handles ranges that span
    midnight (e.g. `22:00`-`06:00`).
+
+**Central "all bells muted" gate** (`allBellsMuted`, `setAllBellsMuted()`,
+`MUTED_PATH = 'plugins.signalkShipsBell.muted'`): a third, separate mute
+mechanism, deliberately NOT folded into `isMuted(options)` and checked as
+its own `if` at the very top of `strikeBell()` instead — conceptually
+different from the other two (which are config-driven and re-evaluated
+fresh against the clock/`navigation.state` on every strike), this is a
+plain runtime flag any other plugin/automation can flip directly, for
+reasons this plugin has no way to know about itself. Two ways to change
+it, both wired through the same `setAllBellsMuted()` so they can never
+drift apart: `app.registerPutHandler('vessels.self', MUTED_PATH, ...)`
+(`plugin.start`, rejects a non-boolean value with a `400`-equivalent
+`ActionResult`) and `GET`/`PUT /plugins/signalk-ships-bells/muted`
+(`registerWithRouter`). `setAllBellsMuted()` always publishes the new
+state as a plain boolean delta on `MUTED_PATH` via `app.handleMessage` —
+including once, unconditionally, right after the PUT handler is
+registered in `plugin.start`, so the path has real data in the Data
+Browser immediately rather than only once something first changes it.
+Deliberately NOT persisted via `app.savePluginOptions` — resets to
+unmuted on every plugin restart (a crash/reboot can never leave the boat
+silently and permanently muted; whatever needs it muted is expected to
+re-assert that itself) — this is the one meaningful way it differs from
+every other setting in this file, most of which *are* persisted. The
+manual test button ignores it exactly like it ignores the other two mute
+reasons (see below) — never bypass that on purpose.
 
 **Night-volume reduction** (separate from muting): `nightVolumeEnabled` +
 start/end + `nightVolumeLevel` (%). Reuses `isWithinQuietHours` for the range
@@ -324,9 +349,11 @@ webapp, not just the admin config UI), `GET`/`PUT .../offset` (read/write
 field or both; not used by the webapp, for external tooling), `POST
 .../test-strike` (see above), `GET .../zones` (proxies signalk-jukebox's own
 zone list for the webapp), `GET`/`PUT .../mopidy-zones` (read/write
-`mopidyZoneIds`, the webapp's per-zone checkbox selection), and `GET
+`mopidyZoneIds`, the webapp's per-zone checkbox selection), `GET
 .../bell-times` (the reference table, see "Bell schedule reference table"
-above).
+above), and `GET`/`PUT .../muted` (the central "all bells muted" gate, see
+above — same state, same delta, as PUTting `plugins.signalkShipsBell.muted`
+over SignalK directly).
 
 **Testing quirks worth knowing** (both discovered the hard way):
 - `play-sound` will find and use *real* system audio players (this sandbox
@@ -344,7 +371,7 @@ above).
 
 ## Test suite
 
-`npm test` runs `node --test test/*.test.js`. Currently **67 tests**. Covers:
+`npm test` runs `node --test test/*.test.js`. Currently **72 tests**. Covers:
 bell-count math for both schemes, quiet-hours/night-volume time-range math
 (including midnight wraparound and invalid-input handling), the manual UTC
 offset (`effectiveMinutesSinceMidnight`, `effectiveWatchScheme`), New Year's

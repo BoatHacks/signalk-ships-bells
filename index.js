@@ -267,6 +267,32 @@ module.exports = function (app) {
   let alertsConnectImpl = net.createConnection.bind(net);
   let spawnImpl = spawn;
 
+  // ---- Central "all bells muted" gate ---------------------------------
+  //
+  // A single external override, independent of muteWhenAnchoredOrMoored/
+  // quietHoursEnabled (both config-driven, evaluated fresh against the
+  // clock/navigation.state on every strike) -- this is instead a plain
+  // runtime flag another plugin or automation can flip on/off directly,
+  // for reasons this plugin has no way to know about itself (e.g. "the
+  // owner is asleep in the next berth over", a race-committee silence
+  // period, or any other boat-specific rule). Deliberately NOT persisted
+  // via app.savePluginOptions -- it resets to unmuted on every plugin
+  // restart, so a crash or reboot can never leave the boat silently and
+  // permanently muted; whatever set it is expected to re-assert it if it
+  // still applies. The manual test button (/test-strike) intentionally
+  // ignores this, same as it already ignores every other mute reason --
+  // a test triggered by hand is deliberate.
+  let allBellsMuted = false;
+  const MUTED_PATH = 'plugins.signalkShipsBell.muted';
+
+  function setAllBellsMuted(muted) {
+    allBellsMuted = !!muted;
+    app.handleMessage(plugin.id, {
+      updates: [{ values: [{ path: MUTED_PATH, value: allBellsMuted }] }]
+    });
+    return allBellsMuted;
+  }
+
   // Lazily require play-sound so the plugin still loads (and its config UI still
   // works) on systems where that optional dependency isn't installed, unless
   // server-speaker playback is actually selected.
@@ -702,6 +728,10 @@ module.exports = function (app) {
   }
 
   function strikeBell(strikes, options) {
+    if (allBellsMuted) {
+      app.debug(`ships-bells: ${strikes} bell(s) due, but muted via the central "all bells muted" gate`);
+      return;
+    }
     if (isMuted(options)) {
       app.debug(
         `ships-bells: ${strikes} bell(s) due, but muted ` +
@@ -1217,6 +1247,25 @@ module.exports = function (app) {
       });
     });
 
+    // The central "all bells muted" gate (see setAllBellsMuted() above) --
+    // an HTTP-only mirror of the same MUTED_PATH SignalK PUT handler
+    // (plugin.start), for any consumer that would rather use a plain REST
+    // call than a SignalK PUT. Both go through the same setter, so a
+    // change made either way is reflected by both immediately, and both
+    // trigger the same outgoing delta.
+    router.get('/muted', (req, res) => {
+      res.json({ muted: allBellsMuted });
+    });
+
+    router.put('/muted', (req, res) => {
+      const body = req.body || {};
+      if (typeof body.muted !== 'boolean') {
+        res.status(400).json({ error: 'Body must include a boolean "muted" field' });
+        return;
+      }
+      res.json({ muted: setAllBellsMuted(body.muted) });
+    });
+
     // Lets the "play test bell" button in the webapp also exercise server-speaker
     // and mopidy output when one of those is part of the configured playback
     // method - a plain client-side <audio> play() can't reach either, so this is
@@ -1363,6 +1412,27 @@ module.exports = function (app) {
       .onValue((value) => {
         currentNavState = value;
       });
+
+    // Lets another plugin/automation flip the central mute gate via a plain
+    // SignalK PUT (either the REST PUT API or a delta PUT over the
+    // WebSocket) -- context 'vessels.self' since this is a whole-vessel
+    // setting, not per-device. Registered here (not module scope) so it's
+    // a no-op while the plugin itself is disabled, matching the nav-state
+    // subscription right above; there's no unregisterPutHandler in the
+    // SignalK plugin API, so re-enabling after a stop()/start() cycle just
+    // re-registers the same handler (harmless, SignalK's own dispatch
+    // only ever calls the most recently registered one for a given path).
+    app.registerPutHandler('vessels.self', MUTED_PATH, (context, path, value, callback) => {
+      if (typeof value !== 'boolean') {
+        return { state: 'COMPLETED', statusCode: 400, message: `${MUTED_PATH} must be a boolean` };
+      }
+      setAllBellsMuted(value);
+      return { state: 'COMPLETED', statusCode: 200 };
+    });
+    // Publishes the current (always unmuted-on-restart) state immediately,
+    // so the path is visible in the Data Browser right away rather than
+    // only once something first changes it.
+    setAllBellsMuted(allBellsMuted);
 
     scheduleNextStrike(currentOptions);
     scheduleNextNewYearExtraStrike(currentOptions);

@@ -50,6 +50,19 @@ listens for it over the SignalK websocket and plays the matching audio file.
     with a start and end time (`HH:MM`, 24-hour, ship-local time). The end
     time can be earlier than the start to span midnight, e.g. `22:00`–`06:00`.
     Independent of, and combinable with, the anchor/moored mute above.
+  - **Central "all bells muted" gate** — a single external override,
+    independent of the two config-driven mute reasons above: any other
+    plugin or automation can mute/unmute every strike directly, for
+    reasons this plugin has no way to know about on its own. Not a config
+    setting — a plain runtime flag, changeable via either a SignalK PUT to
+    `plugins.signalkShipsBell.muted` (context `vessels.self`) or `GET`/
+    `PUT /plugins/signalk-ships-bells/muted`; both go through the same
+    state and publish the same delta either way. Deliberately **not**
+    persisted — it always resets to unmuted on a plugin/server restart, so
+    a crash or reboot can never leave the boat permanently and silently
+    muted; whatever set it is expected to re-assert it if it still
+    applies. Like the other mute reasons, the manual test button ignores
+    it — a test triggered by hand is deliberate.
   - **Reduce volume during a time range** — for when full silence isn't
     wanted, just quieter. Same `HH:MM` start/end shape as above (independent
     of it — different range if you want), plus a reduced volume level (%).
@@ -154,6 +167,11 @@ listens for it over the SignalK websocket and plays the matching audio file.
   offset without the admin config UI. `PUT` supports partial updates (send
   either field, or both). Not used by the bundled webapp's own UI, but read
   by its bell-schedule reference table (below).
+- **"All bells muted" gate REST API** — `GET`/`PUT
+  /plugins/signalk-ships-bells/muted` reads/writes the central mute gate
+  described above (`{"muted": true}`/`{"muted": false}`). Equivalent to,
+  and always in sync with, PUTting the same boolean to
+  `plugins.signalkShipsBell.muted` over SignalK directly.
 - **Bell schedule reference table** — a collapsible "Bell schedule
   reference" section in the webapp, backed by `GET
   /plugins/signalk-ships-bells/bell-times`, laid out like [Wikipedia's

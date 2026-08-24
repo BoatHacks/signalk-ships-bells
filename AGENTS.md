@@ -13,6 +13,14 @@ BoatHacks/signalk-ships-bells (renamed from the singular
   pre-1797 (continues 5-6-7 through second dog watch).
 - Admin UI config: enable toggle, watch scheme dropdown, "mute bell when at
   anchor or moored" checkbox (depends on `navigation.state`).
+- A central "all bells muted" gate, independent of the config-driven mute
+  reasons above and NOT itself a persisted config setting: any other
+  plugin/automation can mute/unmute every strike via a SignalK PUT to
+  `plugins.signalkShipsBell.muted` (context `vessels.self`) or `GET`/`PUT
+  /plugins/signalk-ships-bells/muted` — both go through the same state and
+  publish the same delta. Always resets to unmuted on a plugin/server
+  restart (deliberately not persisted). Ignored by the manual test button,
+  same as the other mute reasons.
 - Bundled bell audio (`bell-strikes-1.wav` through `bell-strikes-8.wav`) from
   Benboncan's "Bells / Gongs" Freesound pack, CC BY 4.0, in `public/bells/`
   with attribution `NOTICE.md`.

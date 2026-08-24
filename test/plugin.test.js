@@ -8,6 +8,7 @@ function makeMockApp(overrides) {
   const noop = () => {};
   const debugLog = [];
   const errorLog = [];
+  const putHandlers = {};
   return Object.assign(
     {
       debug: (msg) => debugLog.push(msg),
@@ -15,8 +16,12 @@ function makeMockApp(overrides) {
       handleMessage: noop,
       streambundle: { getSelfStream: () => ({ onValue: () => noop }) },
       savePluginOptions: (options, cb) => cb(null),
+      registerPutHandler: (context, path, handler) => {
+        putHandlers[`${context}:${path}`] = handler;
+      },
       _debugLog: debugLog,
-      _errorLog: errorLog
+      _errorLog: errorLog,
+      _putHandlers: putHandlers
     },
     overrides
   );
@@ -356,6 +361,139 @@ test('PUT /offset returns 500 if savePluginOptions fails', () => {
   plugin.stop();
 });
 
+test('the central "all bells muted" gate: GET/PUT /muted, the SignalK PUT handler, and the strike gate all share one state', () => {
+  const app = makeMockApp();
+  const messages = [];
+  app.handleMessage = (id, delta) => messages.push(delta);
+  const plugin = createPlugin(app);
+  const router = makeFakeRouter();
+  plugin.registerWithRouter(router);
+  plugin.start({ enabled: true, watchScheme: 'traditional', muteWhenAnchoredOrMoored: false });
+
+  // Starts unmuted, and plugin.start() already published that as a delta.
+  let res = makeFakeRes();
+  router.routes.get['/muted']({}, res);
+  assert.deepStrictEqual(res.body, { muted: false });
+  assert.strictEqual(messages.length, 1);
+  assert.deepStrictEqual(messages[0].updates[0].values[0], { path: 'plugins.signalkShipsBell.muted', value: false });
+
+  // The REST route mutes it, and publishes a second delta.
+  res = makeFakeRes();
+  router.routes.put['/muted']({ body: { muted: true } }, res);
+  assert.deepStrictEqual(res.body, { muted: true });
+  assert.strictEqual(messages.length, 2);
+  assert.deepStrictEqual(messages[1].updates[0].values[0], { path: 'plugins.signalkShipsBell.muted', value: true });
+
+  // GET reflects it too -- same underlying state, not a separate copy.
+  res = makeFakeRes();
+  router.routes.get['/muted']({}, res);
+  assert.deepStrictEqual(res.body, { muted: true });
+
+  // The SignalK PUT handler (registered under 'vessels.self') sets the exact
+  // same state -- flipping it back unmutes both the REST route's own view
+  // and the strike gate below.
+  const putHandler = app._putHandlers['vessels.self:plugins.signalkShipsBell.muted'];
+  assert.strictEqual(typeof putHandler, 'function');
+  const result = putHandler('vessels.self', 'plugins.signalkShipsBell.muted', false, () => {});
+  assert.strictEqual(result.state, 'COMPLETED');
+  assert.strictEqual(result.statusCode, 200);
+
+  res = makeFakeRes();
+  router.routes.get['/muted']({}, res);
+  assert.deepStrictEqual(res.body, { muted: false });
+
+  plugin.stop();
+});
+
+test('PUT /muted rejects a non-boolean value with 400', () => {
+  const app = makeMockApp();
+  const plugin = createPlugin(app);
+  const router = makeFakeRouter();
+  plugin.registerWithRouter(router);
+  plugin.start({ enabled: true, watchScheme: 'traditional', muteWhenAnchoredOrMoored: false });
+
+  const res = makeFakeRes();
+  router.routes.put['/muted']({ body: { muted: 'yes' } }, res);
+
+  assert.strictEqual(res.statusCode, 400);
+
+  plugin.stop();
+});
+
+test('the SignalK PUT handler for the mute gate rejects a non-boolean value with 400, without changing state', () => {
+  const app = makeMockApp();
+  const plugin = createPlugin(app);
+  const router = makeFakeRouter();
+  plugin.registerWithRouter(router);
+  plugin.start({ enabled: true, watchScheme: 'traditional', muteWhenAnchoredOrMoored: false });
+
+  const putHandler = app._putHandlers['vessels.self:plugins.signalkShipsBell.muted'];
+  const result = putHandler('vessels.self', 'plugins.signalkShipsBell.muted', 'true', () => {});
+  assert.strictEqual(result.state, 'COMPLETED');
+  assert.strictEqual(result.statusCode, 400);
+
+  const res = makeFakeRes();
+  router.routes.get['/muted']({}, res);
+  assert.deepStrictEqual(res.body, { muted: false });
+
+  plugin.stop();
+});
+
+test('the "all bells muted" gate suppresses a real strike entirely -- webapp, server speaker, Mopidy, and Alerts all skipped', async (t) => {
+  const app = makeMockApp();
+  const messages = [];
+  app.handleMessage = (id, delta) => messages.push(delta);
+  const plugin = createPlugin(app);
+  const router = makeFakeRouter();
+  plugin.registerWithRouter(router);
+  const fakeSpawn = makeFakeSpawn();
+  plugin._setSpawnForTesting(fakeSpawn);
+  plugin._setAlertsConnectForTesting(() => makeFakeAlertsSocket());
+
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: new Date('2026-06-15T22:00:00.000Z').getTime() });
+  plugin.start({
+    enabled: true,
+    watchScheme: 'traditional',
+    playbackWebapp: true,
+    playbackServerSpeaker: false,
+    playbackAlerts: true,
+    muteWhenAnchoredOrMoored: false
+  });
+
+  router.routes.put['/muted']({ body: { muted: true } }, makeFakeRes());
+  messages.length = 0; // discard the gate's own delta, only care about strike output below
+
+  t.mock.timers.tick(30 * 60 * 1000); // next half-hour boundary
+  await flushMicrotasks();
+
+  assert.strictEqual(messages.length, 0, 'no strike notification should have been published');
+  assert.strictEqual(fakeSpawn.calls.length, 0, 'no ffmpeg/Alerts playback should have been attempted');
+
+  plugin.stop();
+});
+
+test('the manual test button (/test-strike) ignores the "all bells muted" gate, same as it ignores every other mute reason', async () => {
+  const app = makeMockApp();
+  const plugin = createPlugin(app);
+  const router = makeFakeRouter();
+  plugin.registerWithRouter(router);
+  const fakeSpawn = makeFakeSpawn();
+  plugin._setSpawnForTesting(fakeSpawn);
+  plugin._setAlertsConnectForTesting(() => makeFakeAlertsSocket());
+  plugin.start({ enabled: true, watchScheme: 'traditional', playbackAlerts: true, muteWhenAnchoredOrMoored: true });
+
+  router.routes.put['/muted']({ body: { muted: true } }, makeFakeRes());
+
+  const res = makeFakeRes();
+  router.routes.post['/test-strike']({}, res);
+  await flushMicrotasks();
+
+  assert.strictEqual(res.body.playedOnAlerts, true);
+  assert.strictEqual(fakeSpawn.calls.length, 1);
+
+  plugin.stop();
+});
+
 test('POST /test-strike does not touch server speaker when only webapp is enabled', () => {
   const app = makeMockApp();
   const plugin = createPlugin(app);
@@ -422,8 +560,13 @@ test("New Year's Eve gets an extra 8-bell strike at 23:59:47, independent of and
   const strikeLog = [];
   const app = makeMockApp({
     handleMessage: (id, delta) => {
+      const v = delta.updates[0].values[0];
+      // Ignore the "all bells muted" gate's own initial-state publish
+      // (plugin.start) -- a plain boolean, not the strike notification
+      // shape this test cares about.
+      if (v.path !== 'notifications.plugins.signalkShipsBell.strike') return;
       strikeLog.push({
-        strikes: delta.updates[0].values[0].value.data.strikes,
+        strikes: v.value.data.strikes,
         at: new Date().toISOString()
       });
     }
@@ -697,8 +840,11 @@ test('webapp and mopidy checkboxes can both be enabled at once and both fire on 
   t.mock.timers.tick(30 * 60 * 1000); // next half-hour boundary
   await flushMicrotasks();
 
-  assert.strictEqual(messages.length, 1);
-  assert.strictEqual(messages[0].updates[0].values[0].path, 'notifications.plugins.signalkShipsBell.strike');
+  // messages[0] is the "all bells muted" gate's own initial-state publish
+  // (plugin.start), unmuted -- unrelated to this test, only the strike
+  // notification itself matters here.
+  const strikeMessages = messages.filter((m) => m.updates[0].values[0].path === 'notifications.plugins.signalkShipsBell.strike');
+  assert.strictEqual(strikeMessages.length, 1);
   assert.strictEqual(fakeFetch.calls[0].body.method, 'core.playback.get_state');
   assert.strictEqual(fakeFetch.calls[1].body.method, 'core.tracklist.add');
 
