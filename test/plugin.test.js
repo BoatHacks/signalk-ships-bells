@@ -73,10 +73,33 @@ test('schema enum/enumNames stay in sync and defaults are valid members', () => 
 
   assert.strictEqual(typeof props.enabled.default, 'boolean');
   assert.strictEqual(typeof props.muteWhenAnchoredOrMoored.default, 'boolean');
-  assert.strictEqual(props.playbackWebapp.default, true);
-  assert.strictEqual(props.playbackServerSpeaker.default, false);
-  assert.strictEqual(props.playbackMopidy.default, false);
-  assert.strictEqual(props.playbackAlerts.default, false);
+
+  const outputs = props.playbackOutputs.properties;
+  assert.strictEqual(outputs.playbackWebapp.default, true);
+  assert.strictEqual(outputs.playbackServerSpeaker.default, false);
+  assert.strictEqual(outputs.playbackMopidy.default, false);
+  assert.strictEqual(outputs.playbackAlerts.default, false);
+});
+
+test('each playback output has its own settings subsection', () => {
+  const app = makeMockApp();
+  const plugin = createPlugin(app);
+  const props = plugin.schema.properties;
+
+  for (const key of ['webPlayerSettings', 'serverSpeakerSettings', 'mopidySettings', 'alertsSettings']) {
+    assert.strictEqual(props[key].type, 'object', `${key} should be an object schema (its own fieldset)`);
+  }
+  assert.deepStrictEqual(
+    Object.keys(props.mopidySettings.properties).sort(),
+    ['mopidyAudioBaseUrl', 'mopidyHost', 'mopidyPort', 'snapcastControlPort']
+  );
+  assert.deepStrictEqual(
+    Object.keys(props.alertsSettings.properties).sort(),
+    ['alertsPort', 'alertsStreamName']
+  );
+  // snapcastHost is shared by mopidySettings' own zone muting and
+  // alertsSettings' own stream connection, so it stays outside both.
+  assert.strictEqual(props.snapcastHost.type, 'string');
 });
 
 test('start()/stop() do not throw when enabled, and stop() clears its timers', () => {
@@ -541,7 +564,7 @@ test('mopidy RPC failure is logged via app.error, not thrown', async () => {
   plugin.stop();
 });
 
-test('legacy playbackMethod values migrate to the three checkboxes and are persisted', () => {
+test('legacy playbackMethod values migrate all the way through to the grouped playbackOutputs, and are persisted', () => {
   const cases = [
     ['webapp', { playbackWebapp: true, playbackServerSpeaker: false, playbackMopidy: false }],
     ['server-speaker', { playbackWebapp: false, playbackServerSpeaker: true, playbackMopidy: false }],
@@ -559,26 +582,69 @@ test('legacy playbackMethod values migrate to the three checkboxes and are persi
     plugin.start(options);
 
     assert.strictEqual(options.playbackMethod, undefined);
-    assert.strictEqual(options.playbackWebapp, expected.playbackWebapp);
-    assert.strictEqual(options.playbackServerSpeaker, expected.playbackServerSpeaker);
-    assert.strictEqual(options.playbackMopidy, expected.playbackMopidy);
+    assert.strictEqual(options.playbackWebapp, undefined, 'flat legacy key should have been nested away');
+    assert.strictEqual(options.playbackOutputs.playbackWebapp, expected.playbackWebapp);
+    assert.strictEqual(options.playbackOutputs.playbackServerSpeaker, expected.playbackServerSpeaker);
+    assert.strictEqual(options.playbackOutputs.playbackMopidy, expected.playbackMopidy);
     assert.strictEqual(saved, options);
 
     plugin.stop();
   }
 });
 
-test('a fresh install with no legacy playbackMethod is left alone (no migration, no save)', () => {
+test('old flat playback keys (already past the playbackMethod era) migrate into the grouped shape too', () => {
+  const app = makeMockApp();
+  let saved = null;
+  app.savePluginOptions = (options, cb) => { saved = options; cb(null); };
+  const plugin = createPlugin(app);
+  const options = {
+    enabled: true,
+    watchScheme: 'traditional',
+    playbackWebapp: true,
+    playbackMopidy: true,
+    mopidyHost: '192.168.1.50',
+    mopidyPort: 7000,
+    snapcastControlPort: 1706,
+    muteWhenAnchoredOrMoored: true
+  };
+
+  plugin.start(options);
+
+  assert.strictEqual(options.playbackWebapp, undefined);
+  assert.strictEqual(options.mopidyHost, undefined);
+  assert.deepStrictEqual(options.playbackOutputs, {
+    playbackWebapp: true,
+    playbackServerSpeaker: false,
+    playbackMopidy: true,
+    playbackAlerts: false
+  });
+  assert.deepStrictEqual(options.mopidySettings, {
+    mopidyHost: '192.168.1.50',
+    mopidyPort: 7000,
+    mopidyAudioBaseUrl: '',
+    snapcastControlPort: 1706
+  });
+  assert.strictEqual(saved, options);
+
+  plugin.stop();
+});
+
+test('a fresh install with the current grouped shape is left alone (no migration, no save)', () => {
   const app = makeMockApp();
   let saveCalled = false;
   app.savePluginOptions = (options, cb) => { saveCalled = true; cb(null); };
   const plugin = createPlugin(app);
-  const options = { enabled: true, watchScheme: 'traditional', playbackWebapp: true, muteWhenAnchoredOrMoored: true };
+  const options = {
+    enabled: true,
+    watchScheme: 'traditional',
+    playbackOutputs: { playbackWebapp: true, playbackServerSpeaker: false, playbackMopidy: false, playbackAlerts: false },
+    muteWhenAnchoredOrMoored: true
+  };
 
   plugin.start(options);
 
   assert.strictEqual(saveCalled, false);
-  assert.strictEqual(options.playbackServerSpeaker, undefined);
+  assert.strictEqual(options.mopidySettings, undefined);
 
   plugin.stop();
 });

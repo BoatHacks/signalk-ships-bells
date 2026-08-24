@@ -120,6 +120,27 @@ added afterward and isn't part of this migration at all - it just defaults
 any new key is present (including a deliberate `false`), and a no-op for a
 fresh install with no legacy field at all.
 
+**Schema grouping** (`playbackOutputs`/`webPlayerSettings`/
+`serverSpeakerSettings`/`mopidySettings`/`alertsSettings`, all nested `type:
+'object'` schema properties): the admin config UI renders a nested object
+property as its own titled fieldset, which is how the four playback
+checkboxes above got grouped into one "Playback outputs" subsection (with a
+note that detail settings are further down) and each checkbox got its own
+detail subsection below it. `mopidyHost`/`mopidyPort`/`mopidyAudioBaseUrl`/
+`snapcastControlPort` live under `mopidySettings`; `alertsPort`/
+`alertsStreamName` live under `alertsSettings`; `snapcastHost` stays a
+top-level field (not nested under either) since it's shared by both
+sections' own Snapcast connections. `migratePlaybackSettingsGrouping()` runs
+right after `migratePlaybackMethod()` at `plugin.start()` — same no-op-once
+pattern (a no-op as soon as `options.playbackOutputs` exists, and a no-op
+for a fresh install with none of the old flat keys either), so an install
+still on the even-older `playbackMethod` shape migrates through both steps
+in one `plugin.start()` call. Every runtime read of these fields (in
+`resolveMopidyAudioBaseUrl`/`playOnMopidy`/`playOnAlerts`/`strikeBell`/the
+`/test-strike` route) reads `options.playbackOutputs`/`mopidySettings`/
+`alertsSettings` — never the old flat keys, which only still appear as
+migration *sources* inside `migratePlaybackSettingsGrouping()` itself.
+
 **Mopidy sound server playback** (`playbackMopidy: true`, added because a
 user's `signalk-jukebox` Snapclient was holding the sound card open, starving
 `play-sound`'s server-speaker path): `playOnMopidy()` drives Mopidy over its

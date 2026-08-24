@@ -58,8 +58,10 @@ listens for it over the SignalK websocket and plays the matching audio file.
     mixer volume, restored to whatever it was afterward); server-speaker
     playback via `play-sound` doesn't offer a portable way to control output
     volume, so it always plays at full volume regardless of this setting.
-  - **Playback outputs** — four independent checkboxes, any combination of
-    which can be on at once:
+  - **Playback outputs** — four independent checkboxes, grouped together at
+    the top of the admin config screen (any combination can be on at once),
+    with a note that each one's detail settings are further down; each
+    checkbox has its own settings subsection below it:
     - *Play in web player* (on by default) — each strike is sent as a
       `notifications.plugins.signalkShipsBell.strike` delta. The bundled
       webapp (open it from the SignalK admin UI's webapps list, or at
@@ -135,9 +137,10 @@ listens for it over the SignalK websocket and plays the matching audio file.
       elsewhere.
 
     Installs configured before this became three checkboxes (the old
-    single-select `webapp`/`server speaker`/`both`/`mopidy` field) migrate
-    automatically the first time the plugin starts - no need to re-check
-    anything.
+    single-select `webapp`/`server speaker`/`both`/`mopidy` field), and
+    installs configured before the checkboxes/detail fields were grouped
+    into subsections, both migrate automatically the first time the plugin
+    starts - no need to re-check or re-enter anything.
 - **Schedule selection from the webapp** — the same watch-bell schedule choice
   is also available directly in `public/`, via a dropdown that reads and
   writes the setting through a small REST API exposed by the plugin

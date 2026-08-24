@@ -298,8 +298,9 @@ module.exports = function (app) {
   }
 
   function resolveMopidyAudioBaseUrl(options) {
-    if (options.mopidyAudioBaseUrl) {
-      return options.mopidyAudioBaseUrl.replace(/\/$/, '');
+    const mopidyAudioBaseUrl = (options.mopidySettings || {}).mopidyAudioBaseUrl;
+    if (mopidyAudioBaseUrl) {
+      return mopidyAudioBaseUrl.replace(/\/$/, '');
     }
     const port = (app.config && app.config.settings && app.config.settings.port) || 3000;
     return `http://localhost:${port}`;
@@ -464,10 +465,11 @@ module.exports = function (app) {
   }
 
   function playOnMopidy(strikes, options, volumeFactor) {
-    const host = options.mopidyHost || 'localhost';
-    const port = options.mopidyPort || 6680;
+    const mopidySettings = options.mopidySettings || {};
+    const host = mopidySettings.mopidyHost || 'localhost';
+    const port = mopidySettings.mopidyPort || 6680;
     const snapHost = options.snapcastHost || 'localhost';
-    const snapPort = options.snapcastControlPort || 1705;
+    const snapPort = mopidySettings.snapcastControlPort || 1705;
     const zoneIds = Array.isArray(options.mopidyZoneIds) ? options.mopidyZoneIds : [];
     const factor = typeof volumeFactor === 'number' ? volumeFactor : 1;
     const url = `${resolveMopidyAudioBaseUrl(options)}/signalk-ships-bells/bells/${bellFile(strikes)}`;
@@ -557,9 +559,10 @@ module.exports = function (app) {
   // logs.
 
   function playOnAlerts(strikes, options) {
+    const alertsSettings = options.alertsSettings || {};
     const host = options.snapcastHost || 'localhost';
-    const port = options.alertsPort || 4953;
-    const streamName = options.alertsStreamName || 'Alerts';
+    const port = alertsSettings.alertsPort || 4953;
+    const streamName = alertsSettings.alertsStreamName || 'Alerts';
 
     app.debug(`ships-bells: streaming into Snapcast stream "${streamName}" at ${host}:${port}`);
     const socket = alertsConnectImpl(port, host);
@@ -611,10 +614,11 @@ module.exports = function (app) {
       return;
     }
 
-    const webapp = options.playbackWebapp !== undefined ? !!options.playbackWebapp : true;
-    const serverSpeaker = !!options.playbackServerSpeaker;
-    const mopidy = !!options.playbackMopidy;
-    const alerts = !!options.playbackAlerts;
+    const playbackOutputs = options.playbackOutputs || {};
+    const webapp = playbackOutputs.playbackWebapp !== undefined ? !!playbackOutputs.playbackWebapp : true;
+    const serverSpeaker = !!playbackOutputs.playbackServerSpeaker;
+    const mopidy = !!playbackOutputs.playbackMopidy;
+    const alerts = !!playbackOutputs.playbackAlerts;
     app.debug(
       `ships-bells: striking ${strikes} bell(s), file ${bellFile(strikes)}, ` +
       `webapp=${webapp}, serverSpeaker=${serverSpeaker}, mopidy=${mopidy}, alerts=${alerts}`
@@ -755,125 +759,165 @@ module.exports = function (app) {
         maximum: 240,
         default: 0
       },
-      playbackWebapp: {
-        type: 'boolean',
-        title: 'Play in web player',
+      playbackOutputs: {
+        type: 'object',
+        title: 'Playback outputs',
         description:
-          "Plays through the browser wherever this plugin's webapp is open (e.g. a " +
-          "helm tablet). Combinable with either output below - any combination can " +
-          "be enabled at once.",
-        default: true
+          "Choose where bell strikes play - any combination can be enabled at once. " +
+          "Detail settings for each are further down, in the matching section below.",
+        properties: {
+          playbackWebapp: {
+            type: 'boolean',
+            title: 'Play in web player',
+            description:
+              "Plays through the browser wherever this plugin's webapp is open (e.g. " +
+              "a helm tablet).",
+            default: true
+          },
+          playbackServerSpeaker: {
+            type: 'boolean',
+            title: 'Play on server (local speaker)',
+            description:
+              "Plays directly on the machine running Signal K, via a speaker wired " +
+              "to it - no browser needed, but requires the 'play-sound' npm package " +
+              "plus a system audio player (e.g. mpg123 or aplay) installed on that " +
+              "machine, and that speaker can't also be in use by something else " +
+              "(e.g. a Snapcast client for signalk-jukebox) at the same time - use " +
+              "Mopidy playback instead in that case.",
+            default: false
+          },
+          playbackMopidy: {
+            type: 'boolean',
+            title: 'Play via Mopidy sound server',
+            description:
+              "Sends the bell through a Mopidy instance instead (e.g. " +
+              "signalk-jukebox's own container) - see 'Mopidy sound server " +
+              "settings' below. If Mopidy is already playing something, it's " +
+              "paused (ducked) for the strike and resumed at the same position " +
+              "afterward.",
+            default: false
+          },
+          playbackAlerts: {
+            type: 'boolean',
+            title: 'Play via Alerts stream (signalk-jukebox)',
+            description:
+              "Streams the bell directly into signalk-jukebox's \"Alerts\" " +
+              "Snapcast stream, bypassing Mopidy entirely - see 'Alerts stream " +
+              "settings' below. Only zones currently switched to \"Alerts\" in " +
+              "signalk-jukebox's own webapp hear it - zones still on \"jukebox\" " +
+              "don't, since a Snapcast zone can only be on one stream at a time. " +
+              "Unlike Mopidy playback, this never interrupts anything: the Alerts " +
+              "stream is entirely separate from whatever's playing on the jukebox " +
+              "stream. Requires ffmpeg installed on this machine, to resample the " +
+              "bundled bell files (44100:16:2) to the Alerts stream's fixed format " +
+              "(48000:16:2) - Snapcast's own intake doesn't resample.",
+            default: false
+          }
+        }
       },
-      playbackServerSpeaker: {
-        type: 'boolean',
-        title: 'Play on server (local speaker)',
+      webPlayerSettings: {
+        type: 'object',
+        title: 'Web player settings',
         description:
-          "Plays directly on the machine running Signal K, via a speaker wired to " +
-          "it - no browser needed, but requires the 'play-sound' npm package plus a " +
-          "system audio player (e.g. mpg123 or aplay) installed on that machine, and " +
-          "that speaker can't also be in use by something else (e.g. a Snapcast " +
-          "client for signalk-jukebox) at the same time - use Mopidy playback below " +
-          "instead in that case.",
-        default: false
+          "No additional settings - only used when 'Play in web player' above is " +
+          "checked.",
+        properties: {}
       },
-      playbackMopidy: {
-        type: 'boolean',
-        title: 'Play via Mopidy sound server',
+      serverSpeakerSettings: {
+        type: 'object',
+        title: 'Server speaker settings',
         description:
-          "Sends the bell through a Mopidy instance instead (e.g. signalk-jukebox's " +
-          "own container) - see the Mopidy fields below. If Mopidy is already " +
-          "playing something, it's paused (ducked) for the strike and resumed at " +
-          "the same position afterward.",
-        default: false
+          "No additional settings - only used when 'Play on server (local " +
+          "speaker)' above is checked. Requires the 'play-sound' npm package plus " +
+          "a system audio player (e.g. mpg123 or aplay) installed on this machine.",
+        properties: {}
       },
-      mopidyHost: {
-        type: 'string',
-        title: 'Mopidy host',
-        description:
-          "Only used when 'Play via Mopidy sound server' above is checked. Where " +
-          "this plugin reaches Mopidy's own JSON-RPC API to send the play command. " +
-          "Default matches a default signalk-jukebox install on this same machine.",
-        default: 'localhost'
-      },
-      mopidyPort: {
-        type: 'integer',
-        title: 'Mopidy port',
+      mopidySettings: {
+        type: 'object',
+        title: 'Mopidy sound server settings',
         description: "Only used when 'Play via Mopidy sound server' above is checked.",
-        default: 6680
-      },
-      mopidyAudioBaseUrl: {
-        type: 'string',
-        title: 'Mopidy audio base URL (optional)',
-        description:
-          "Only used when 'Play via Mopidy sound server' above is checked. Mopidy " +
-          "fetches the bell .wav files over HTTP from this plugin's own webapp " +
-          "(they aren't on Mopidy's local disk) - this is the base URL it uses to do " +
-          "that, e.g. http://192.168.1.50:3000. This is the opposite network " +
-          "direction from Mopidy host/port above, and matters when Mopidy runs in a " +
-          "container (e.g. signalk-jukebox): such a container usually can't reach " +
-          "this host's own loopback address. Leave blank to default to " +
-          "http://localhost:<this Signal K server's own port>, which only works if " +
-          "Mopidy's container uses host networking; otherwise set this to this " +
-          "Signal K server's real LAN IP.",
-        default: ''
+        properties: {
+          mopidyHost: {
+            type: 'string',
+            title: 'Mopidy host',
+            description:
+              "Where this plugin reaches Mopidy's own JSON-RPC API to send the " +
+              "play command. Default matches a default signalk-jukebox install on " +
+              "this same machine.",
+            default: 'localhost'
+          },
+          mopidyPort: {
+            type: 'integer',
+            title: 'Mopidy port',
+            default: 6680
+          },
+          mopidyAudioBaseUrl: {
+            type: 'string',
+            title: 'Mopidy audio base URL (optional)',
+            description:
+              "Mopidy fetches the bell .wav files over HTTP from this plugin's own " +
+              "webapp (they aren't on Mopidy's local disk) - this is the base URL " +
+              "it uses to do that, e.g. http://192.168.1.50:3000. This is the " +
+              "opposite network direction from Mopidy host/port above, and matters " +
+              "when Mopidy runs in a container (e.g. signalk-jukebox): such a " +
+              "container usually can't reach this host's own loopback address. " +
+              "Leave blank to default to http://localhost:<this Signal K server's " +
+              "own port>, which only works if Mopidy's container uses host " +
+              "networking; otherwise set this to this Signal K server's real LAN " +
+              "IP.",
+            default: ''
+          },
+          snapcastControlPort: {
+            type: 'integer',
+            title: 'Snapcast control port',
+            description:
+              "Only used when one or more zones are selected in this plugin's own " +
+              "webapp (\"play bells in <zone>\" checkboxes) - reached at the " +
+              "Snapcast host set below. Default (1705) matches signalk-jukebox's " +
+              "SNAPCAST_CONTROL_PORT. Used to mute every zone except the selected " +
+              "ones for the strike, then restore each one's own prior mute state " +
+              "afterward.",
+            default: 1705
+          }
+        }
       },
       snapcastHost: {
         type: 'string',
         title: 'Snapcast host',
         description:
           "Where this plugin reaches Snapserver directly (not through Mopidy) - " +
-          "used for zone muting during Mopidy playback (below) and for the Alerts " +
-          "stream connection (further below). Default matches a default " +
+          "shared by Mopidy sound server settings' own zone muting above and by " +
+          "Alerts stream settings' own stream connection below, since both usually " +
+          "talk to the same Snapserver instance. Default matches a default " +
           "signalk-jukebox install, where Mopidy and Snapserver run in the same " +
           "container; set this separately if Snapserver runs elsewhere.",
         default: 'localhost'
       },
-      snapcastControlPort: {
-        type: 'integer',
-        title: 'Snapcast control port',
-        description:
-          "Only used when 'Play via Mopidy sound server' above is checked and one or " +
-          "more zones are selected in this plugin's own webapp (\"play bells in " +
-          "<zone>\" checkboxes) - reached at Snapcast host above. Default (1705) " +
-          "matches signalk-jukebox's SNAPCAST_CONTROL_PORT. Used to mute every zone " +
-          "except the selected ones for the strike, then restore each one's own " +
-          "prior mute state afterward.",
-        default: 1705
-      },
-      playbackAlerts: {
-        type: 'boolean',
-        title: 'Play via Alerts stream (signalk-jukebox)',
-        description:
-          "Streams the bell directly into signalk-jukebox's \"Alerts\" Snapcast " +
-          "stream, bypassing Mopidy entirely. Only zones currently switched to " +
-          "\"Alerts\" in signalk-jukebox's own webapp hear it - zones still on " +
-          "\"jukebox\" don't, since a Snapcast zone can only be on one stream at a " +
-          "time. Unlike Mopidy playback above, this never interrupts anything: the " +
-          "Alerts stream is entirely separate from whatever's playing on the " +
-          "jukebox stream. Requires ffmpeg installed on this machine, to resample " +
-          "the bundled bell files (44100:16:2) to the Alerts stream's fixed format " +
-          "(48000:16:2) - Snapcast's own intake doesn't resample.",
-        default: false
-      },
-      alertsPort: {
-        type: 'integer',
-        title: 'Alerts stream port',
-        description:
-          "Only used when 'Play via Alerts stream' above is checked - reached at " +
-          "Snapcast host above. Default (4953) matches signalk-jukebox's " +
-          "ALERTS_PORT.",
-        default: 4953
-      },
-      alertsStreamName: {
-        type: 'string',
-        title: 'Alerts stream name',
-        description:
-          "Only used when 'Play via Alerts stream' above is checked. Doesn't " +
-          "affect the connection itself (Snapcast identifies the stream by which " +
-          "port you connect to, not a name sent over the wire) - shown in this " +
-          "plugin's own log messages, so change it to match signalk-jukebox if its " +
-          "Alerts-equivalent stream was ever renamed or custom-built.",
-        default: 'Alerts'
+      alertsSettings: {
+        type: 'object',
+        title: 'Alerts stream settings',
+        description: "Only used when 'Play via Alerts stream' above is checked.",
+        properties: {
+          alertsPort: {
+            type: 'integer',
+            title: 'Alerts stream port',
+            description:
+              "Reached at the Snapcast host set above. Default (4953) matches " +
+              "signalk-jukebox's ALERTS_PORT.",
+            default: 4953
+          },
+          alertsStreamName: {
+            type: 'string',
+            title: 'Alerts stream name',
+            description:
+              "Doesn't affect the connection itself (Snapcast identifies the " +
+              "stream by which port you connect to, not a name sent over the " +
+              "wire) - shown in this plugin's own log messages, so change it to " +
+              "match signalk-jukebox if its Alerts-equivalent stream was ever " +
+              "renamed or custom-built.",
+            default: 'Alerts'
+          }
+        }
       },
       muteWhenAnchoredOrMoored: {
         type: 'boolean',
@@ -1074,9 +1118,10 @@ module.exports = function (app) {
     // deliberate.
     router.post('/test-strike', (req, res) => {
       const strikes = 8;
-      const serverSpeaker = !!currentOptions.playbackServerSpeaker;
-      const mopidy = !!currentOptions.playbackMopidy;
-      const alerts = !!currentOptions.playbackAlerts;
+      const playbackOutputs = currentOptions.playbackOutputs || {};
+      const serverSpeaker = !!playbackOutputs.playbackServerSpeaker;
+      const mopidy = !!playbackOutputs.playbackMopidy;
+      const alerts = !!playbackOutputs.playbackAlerts;
 
       if (mopidy) {
         playOnMopidy(strikes, currentOptions);
@@ -1128,10 +1173,71 @@ module.exports = function (app) {
     return true;
   }
 
+  // Migrates the four playback checkboxes and their per-method detail
+  // fields (mopidyHost/mopidyPort/mopidyAudioBaseUrl/snapcastControlPort,
+  // alertsPort/alertsStreamName) from top-level schema keys into three
+  // grouped objects (playbackOutputs/mopidySettings/alertsSettings) - the
+  // admin config UI renders a nested schema object as its own fieldset,
+  // which is how the four playback checkboxes and each one's own settings
+  // get their own visual subsection instead of one long flat list. Same
+  // no-op-once pattern as migratePlaybackMethod above (runs right after
+  // it, so an install still on the even older playbackMethod shape
+  // migrates through both steps in one plugin.start call): a no-op as
+  // soon as options.playbackOutputs is already present, and a no-op for a
+  // genuinely fresh install with none of the old flat keys either.
+  // snapcastHost is deliberately NOT moved - it's shared by mopidySettings'
+  // own zone-muting and alertsSettings' own stream connection, so it stays
+  // a single top-level field rather than being duplicated into both.
+  function migratePlaybackSettingsGrouping(options) {
+    if (options.playbackOutputs && typeof options.playbackOutputs === 'object') {
+      return false;
+    }
+    const legacyKeys = [
+      'playbackWebapp', 'playbackServerSpeaker', 'playbackMopidy', 'playbackAlerts',
+      'mopidyHost', 'mopidyPort', 'mopidyAudioBaseUrl', 'snapcastControlPort',
+      'alertsPort', 'alertsStreamName'
+    ];
+    const hasLegacy = legacyKeys.some((key) => Object.prototype.hasOwnProperty.call(options, key));
+    if (!hasLegacy) {
+      return false;
+    }
+
+    options.playbackOutputs = {
+      playbackWebapp: options.playbackWebapp !== undefined ? !!options.playbackWebapp : true,
+      playbackServerSpeaker: !!options.playbackServerSpeaker,
+      playbackMopidy: !!options.playbackMopidy,
+      playbackAlerts: !!options.playbackAlerts
+    };
+    options.mopidySettings = {
+      mopidyHost: options.mopidyHost || 'localhost',
+      mopidyPort: options.mopidyPort || 6680,
+      mopidyAudioBaseUrl: options.mopidyAudioBaseUrl || '',
+      snapcastControlPort: options.snapcastControlPort || 1705
+    };
+    options.alertsSettings = {
+      alertsPort: options.alertsPort || 4953,
+      alertsStreamName: options.alertsStreamName || 'Alerts'
+    };
+
+    delete options.playbackWebapp;
+    delete options.playbackServerSpeaker;
+    delete options.playbackMopidy;
+    delete options.playbackAlerts;
+    delete options.mopidyHost;
+    delete options.mopidyPort;
+    delete options.mopidyAudioBaseUrl;
+    delete options.snapcastControlPort;
+    delete options.alertsPort;
+    delete options.alertsStreamName;
+    return true;
+  }
+
   plugin.start = function (options) {
     app.debug('starting ships-bell plugin', options);
 
-    if (migratePlaybackMethod(options)) {
+    const migratedMethod = migratePlaybackMethod(options);
+    const migratedGrouping = migratePlaybackSettingsGrouping(options);
+    if (migratedMethod || migratedGrouping) {
       app.savePluginOptions(options, (err) => {
         if (err) {
           app.error(`ships-bells: failed to save migrated playback options: ${err.message || err}`);
