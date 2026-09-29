@@ -206,6 +206,7 @@
   var bellTimesBody = document.getElementById('bell-times-body');
   var bellTimesRows = []; // cached {watch, time, bells} from the last fetch
   var bellTimesUsesUtc = false;
+  var bellTimesShipsOffset = null; // minutes east of UTC, when on ship's time
   var highlightTimer = null;
 
   function bellPattern(n) {
@@ -231,9 +232,19 @@
     // effectiveMinutesSinceMidnight() actually reads), local wall-clock
     // marks otherwise -- match whichever this browser's own clock should
     // be compared against so "now" highlights the right row.
+    // With ship's time the rows are ship-local marks, which this browser's
+    // own timezone may not match, so shift UTC by the ship's offset.
     var now = new Date();
-    var h = bellTimesUsesUtc ? now.getUTCHours() : now.getHours();
-    var m = bellTimesUsesUtc ? now.getUTCMinutes() : now.getMinutes();
+    var h;
+    var m;
+    if (bellTimesShipsOffset !== null) {
+      var shipMinutes = (((now.getUTCHours() * 60 + now.getUTCMinutes() + bellTimesShipsOffset) % 1440) + 1440) % 1440;
+      h = Math.floor(shipMinutes / 60);
+      m = shipMinutes % 60;
+    } else {
+      h = bellTimesUsesUtc ? now.getUTCHours() : now.getHours();
+      m = bellTimesUsesUtc ? now.getUTCMinutes() : now.getMinutes();
+    }
     var halfHour = m < 30 ? 0 : 30;
     return String(h).padStart(2, '0') + ':' + String(halfHour).padStart(2, '0');
   }
@@ -248,10 +259,15 @@
   function renderBellTimes(data) {
     bellTimesRows = data.rows || [];
     bellTimesUsesUtc = !!data.usesUtc;
+    bellTimesShipsOffset = typeof data.shipsTimeOffsetMinutes === 'number' ? data.shipsTimeOffsetMinutes : null;
 
     var notes = [];
     if (bellTimesUsesUtc) {
       notes.push('Manual UTC offset is enabled - times below are UTC clock times.');
+    } else if (bellTimesShipsOffset !== null) {
+      notes.push("Times below are ship's time (from signalk-ships-time).");
+    } else if (data.timeSource === 'ships-time') {
+      notes.push("Ship's time is selected but no offset has arrived from signalk-ships-time yet - times below are this server's local time.");
     }
     var hasMuted = bellTimesRows.some(function (r) { return r.muted; });
     var hasReduced = bellTimesRows.some(function (r) { return r.reducedVolume; });

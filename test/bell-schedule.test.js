@@ -10,6 +10,8 @@ const {
   minutesSinceMidnightUTC,
   effectiveMinutesSinceMidnight,
   effectiveWatchScheme,
+  timeSourceOf,
+  hhmmToMinutes,
   buildBellScheduleTable
 } = require('../index.js');
 
@@ -342,4 +344,58 @@ test('buildBellScheduleTable marks rows within nightVolume as reducedVolume, unl
 test('buildBellScheduleTable leaves muted/reducedVolume false everywhere when neither feature is enabled', () => {
   const table = buildBellScheduleTable({ watchScheme: 'traditional' });
   assert.ok(table.rows.every((r) => r.muted === false && r.reducedVolume === false));
+});
+
+test('hhmmToMinutes decodes the Signal K (-)hhmm timezoneOffset encoding', () => {
+  assert.strictEqual(hhmmToMinutes(200), 120);
+  assert.strictEqual(hhmmToMinutes(545), 345);
+  assert.strictEqual(hhmmToMinutes(-930), -570);
+  assert.strictEqual(hhmmToMinutes(0), 0);
+  assert.strictEqual(hhmmToMinutes(-1300), -780);
+  assert.strictEqual(hhmmToMinutes(undefined), undefined);
+  assert.strictEqual(hhmmToMinutes('200'), undefined);
+  assert.strictEqual(hhmmToMinutes(NaN), undefined);
+});
+
+test('timeSourceOf prefers timeSource and falls back to the legacy utcOffsetEnabled checkbox', () => {
+  assert.strictEqual(timeSourceOf({}), 'local');
+  assert.strictEqual(timeSourceOf({ utcOffsetEnabled: true }), 'utc-offset');
+  assert.strictEqual(timeSourceOf({ timeSource: 'ships-time', utcOffsetEnabled: true }), 'ships-time');
+  assert.strictEqual(timeSourceOf({ timeSource: 'bogus' }), 'local');
+});
+
+test("effectiveMinutesSinceMidnight on ship's time: UTC plus the ship's offset, wrapping both ways", () => {
+  const utc0130 = new Date(Date.UTC(2026, 5, 15, 1, 30));
+  const opts = { timeSource: 'ships-time' };
+  assert.strictEqual(effectiveMinutesSinceMidnight(utc0130, opts, 120), 210);
+  assert.strictEqual(effectiveMinutesSinceMidnight(utc0130, opts, -570), (90 - 570 + 1440) % 1440);
+  // No offset received yet: the server's local clock.
+  assert.strictEqual(effectiveMinutesSinceMidnight(utc0130, opts, undefined), minutesSinceMidnight(utc0130));
+});
+
+test("effectiveWatchScheme keeps the configured scheme on ship's time", () => {
+  assert.strictEqual(effectiveWatchScheme({ timeSource: 'ships-time', watchScheme: 'traditional' }), 'traditional');
+  assert.strictEqual(effectiveWatchScheme({ timeSource: 'utc-offset', watchScheme: 'traditional' }), 'simple-cycle');
+});
+
+test("nextNewYearEveTriggerTime with an offset reads 31 Dec 23:59:47 on that clock", () => {
+  const now = new Date(Date.UTC(2026, 5, 15));
+  assert.strictEqual(nextNewYearEveTriggerTime(now, 120).toISOString(), '2026-12-31T21:59:47.000Z');
+  assert.strictEqual(nextNewYearEveTriggerTime(now, -600).toISOString(), '2027-01-01T09:59:47.000Z');
+  // Already past it on the ship's clock: next year's.
+  const lateNye = new Date(Date.UTC(2026, 11, 31, 22, 30)); // 00:30 on 1 Jan at +02:00
+  assert.strictEqual(nextNewYearEveTriggerTime(lateNye, 120).toISOString(), '2027-12-31T21:59:47.000Z');
+});
+
+test("nightVolumeFactorForMoment follows ship's time when selected", () => {
+  const opts = {
+    timeSource: 'ships-time',
+    nightVolumeEnabled: true,
+    nightVolumeStart: '22:00',
+    nightVolumeEnd: '06:00',
+    nightVolumeLevel: 40
+  };
+  const utc1300 = new Date(Date.UTC(2026, 5, 15, 13, 0)); // 22:00 at +09:00
+  assert.strictEqual(nightVolumeFactorForMoment(utc1300, opts, 540), 0.4);
+  assert.strictEqual(nightVolumeFactorForMoment(utc1300, opts, 0), 1);
 });

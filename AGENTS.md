@@ -13,6 +13,10 @@ BoatHacks/signalk-ships-bells (renamed from the singular
   pre-1797 (continues 5-6-7 through second dog watch).
 - Admin UI config: enable toggle, watch scheme dropdown, "mute bell when at
   anchor or moored" checkbox (depends on `navigation.state`).
+- `timeSource` dropdown (local / UTC with manual offset / ship's time): ship's
+  time reads `environment.time.timezoneOffset` from signalk-ships-time and
+  also drives quiet hours, night volume and the New Year's strike; replaces
+  the old `utcOffsetEnabled` checkbox (migrated at start).
 - A central "all bells muted" gate, independent of the config-driven mute
   reasons above and NOT itself a persisted config setting: any other
   plugin/automation can mute/unmute every strike via a SignalK PUT to
