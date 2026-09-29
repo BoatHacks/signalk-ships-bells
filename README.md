@@ -32,17 +32,32 @@ listens for it over the SignalK websocket and plays the matching audio file.
     - *Standard* — ignores the dog-watch split as a concept and just
       cycles 1–8 every 4 hours all day, including through the second dog
       watch (18:30=5, 19:00=6, 19:30=7, 20:00=8).
-  - **Enable manual UTC time offset** / **UTC time offset (minutes)** — runs
-    the schedule against UTC-plus-this-offset (0–240 minutes) instead of the
-    server's local clock, for crews who want the bells to sound at times
-    other than their local wall clock would give. Deliberately UTC-based
-    rather than tied to the server's own timezone/DST. When enabled, the
-    Watch bell schedule setting above is forced to *Standard*, since the
-    British Navy dog-watch reset is tied to real second-dog-watch clock time,
-    which an arbitrary offset would no longer line up with. Not exposed in
-    the webapp UI, but readable/writable via `GET`/`PUT
-    /plugins/signalk-ships-bells/offset` (see below) for external
-    tooling/automation.
+  - **Time source** — which clock the schedule runs on:
+    - *Local* (default) — this server's own clock and timezone.
+    - *UTC with manual offset* (plus **UTC time offset (minutes)**, 0–240) —
+      runs the schedule against UTC-plus-this-offset instead, for crews who
+      want the bells to sound at times other than their local wall clock
+      would give. Deliberately UTC-based rather than tied to the server's
+      own timezone/DST. Forces the Watch bell schedule setting above to
+      *Standard*, since the British Navy dog-watch reset is tied to real
+      second-dog-watch clock time, which an arbitrary offset would no
+      longer line up with. Quiet hours and reduced volume stay on the
+      server's local clock. Also readable/writable via `GET`/`PUT
+      /plugins/signalk-ships-bells/offset` (see below).
+    - *Ship's time* — UTC plus the vessel's timezone offset
+      (`environment.time.timezoneOffset`) published by
+      [signalk-ships-time](https://github.com/meri-imperiumi/signalk-ships-time),
+      which must be installed. The bells, quiet hours, reduced-volume hours
+      and the New Year's Eve strike all follow ship's time, and move with it
+      when signalk-ships-time changes zone (e.g. in its auto mode). The
+      watch bell schedule is not forced to *Standard*, since ship's time is
+      a real local clock. Until an offset has been received, the plugin
+      shows an error status in the admin UI and uses the server's local
+      clock.
+
+    Installs configured before this became a dropdown (the old **Enable
+    manual UTC time offset** checkbox) migrate automatically the first time
+    the plugin starts.
   - **Mute bell when at anchor or moored** — skips playback while
     `navigation.state` is `anchored` or `moored`. Requires that path to be
     populated by something on your system — see below.
@@ -165,7 +180,9 @@ listens for it over the SignalK websocket and plays the matching audio file.
   /plugins/signalk-ships-bells/offset` reads/writes `utcOffsetEnabled` and
   `utcOffsetMinutes` (0–240), for external tooling that wants to set the
   offset without the admin config UI. `PUT` supports partial updates (send
-  either field, or both). Not used by the bundled webapp's own UI, but read
+  either field, or both). `utcOffsetEnabled: true` sets the Time source to
+  *UTC with manual offset*; `false` switches it back to *Local* if it was
+  on the manual offset, and leaves *Ship's time* alone. Not used by the bundled webapp's own UI, but read
   by its bell-schedule reference table (below).
 - **"All bells muted" gate REST API** — `GET`/`PUT
   /plugins/signalk-ships-bells/muted` reads/writes the central mute gate
@@ -198,6 +215,9 @@ listens for it over the SignalK websocket and plays the matching audio file.
   `motoring`) from GPS and propulsion data. The "mute at anchor or moored"
   option here depends on `navigation.state` being set by something; if you
   don't already have a source for it, this plugin is a good fit.
+- [signalk-ships-time](https://github.com/meri-imperiumi/signalk-ships-time) —
+  publishes the vessel's timezone offset, used by the *Ship's time* time
+  source above.
 
 ## Audio assets
 

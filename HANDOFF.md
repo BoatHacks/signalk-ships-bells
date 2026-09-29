@@ -123,6 +123,25 @@ itself is untouched. `utcOffsetEnabled`/`utcOffsetMinutes` ARE now read by
 the webapp indirectly, via `GET /bell-times` (below) — not exposed as a
 webapp control of their own, just reflected in the reference table.
 
+**Time source** (`timeSource`: `local`/`utc-offset`/`ships-time`, replacing
+the old `utcOffsetEnabled` checkbox; `migrateTimeSource()` converts it once
+at `plugin.start()`, and `timeSourceOf()` still reads `utcOffsetEnabled` as a
+fallback so the pure helpers accept either shape). `ships-time` reads
+`environment.time.timezoneOffset` (published by signalk-ships-time, Signal K
+`(-)hhmm` encoding, decoded by `hhmmToMinutes()`): once from
+`app.getSelfPath()` at start, then from a `getSelfStream()` subscription.
+`scheduleOffsetMinutes()` returns the minutes-east-of-UTC shift for either
+offset mode (or `undefined` for the local clock), and
+`effectiveMinutesSinceMidnight()`, `msUntilNextHalfHourBoundary()` and
+`nextNewYearEveTriggerTime()` all use it. Unlike `utc-offset`, `ships-time`
+does not force `simple-cycle`, and quiet hours/night volume follow it via
+`shipLocalMinutesSinceMidnight()`. An offset change re-arms both timers
+(`rescheduleTimers()`), which matters for non-half-hour zones like +05:45.
+With no offset received yet it uses the local clock and calls
+`app.setPluginError()`; `app.setPluginStatus()` once one arrives.
+`GET /bell-times` returns `timeSource` and `shipsTimeOffsetMinutes` so the
+webapp highlights the current row in ship's time, not the browser's.
+
 **Bell schedule reference table** (`buildBellScheduleTable()`, `GET
 /plugins/signalk-ships-bells/bell-times`): a 48-row table, one row per
 half-hour mark, laid out like Wikipedia's Ship's bell page — same seven

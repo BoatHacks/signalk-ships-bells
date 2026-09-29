@@ -6,6 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- *Ship's time* time source: the bell schedule, quiet hours, reduced-volume
+  hours and the New Year's Eve strike can follow the vessel's timezone
+  offset (`environment.time.timezoneOffset`) published by
+  [signalk-ships-time](https://github.com/meri-imperiumi/signalk-ships-time),
+  including zone changes while under way. Opt-in; until an offset arrives
+  the server's local clock is used and the plugin shows an error status.
+
+### Changed
+
+- The **Enable manual UTC time offset** checkbox is now one option of a
+  **Time source** dropdown (Local / UTC with manual offset / Ship's time).
+  Existing settings migrate automatically on first start; the `/offset`
+  REST API keeps its `utcOffsetEnabled` field.
+
 ## [0.1.14] - 2026-08-24
 
 ### Added

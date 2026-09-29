@@ -61,16 +61,81 @@ function minutesSinceMidnightUTC(date) {
   return date.getUTCHours() * 60 + date.getUTCMinutes();
 }
 
-function effectiveMinutesSinceMidnight(date, options) {
-  if (!options.utcOffsetEnabled) {
-    return minutesSinceMidnight(date);
+// ---- Time source ------------------------------------------------------------
+//
+// Which clock the schedule runs on (the `timeSource` config dropdown):
+//  - "local": this server's own local clock (the default).
+//  - "utc-offset": UTC plus the manual utcOffsetMinutes (see above).
+//  - "ships-time": UTC plus the vessel's timezone offset published by the
+//    signalk-ships-time plugin as environment.time.timezoneOffset. Only
+//    used when the user picks it; until an offset has been received (e.g.
+//    signalk-ships-time isn't installed), the server's local clock is used.
+//
+// Installs configured before `timeSource` existed only have the boolean
+// utcOffsetEnabled; timeSourceOf() reads that as the fallback, and
+// migrateTimeSource() (plugin.start) converts it once.
+const TIME_SOURCES = ['local', 'utc-offset', 'ships-time'];
+
+function timeSourceOf(options) {
+  if (TIME_SOURCES.includes(options.timeSource)) {
+    return options.timeSource;
   }
-  const offset = options.utcOffsetMinutes || 0;
-  return (minutesSinceMidnightUTC(date) + offset + 1440) % 1440;
+  return options.utcOffsetEnabled ? 'utc-offset' : 'local';
 }
 
+// environment.time.timezoneOffset uses the Signal K schema's (-)hhmm
+// encoding: 200 = +02:00, -930 = -09:30. Returns minutes east of UTC, or
+// undefined for anything that isn't a finite number.
+function hhmmToMinutes(hhmm) {
+  if (typeof hhmm !== 'number' || !Number.isFinite(hhmm)) {
+    return undefined;
+  }
+  const abs = Math.abs(Math.trunc(hhmm));
+  const minutes = Math.floor(abs / 100) * 60 + (abs % 100);
+  return hhmm < 0 ? -minutes : minutes;
+}
+
+// Minutes east of UTC the schedule is shifted by, or undefined when it runs
+// on the server's local clock ("local", or "ships-time" with no offset
+// received yet).
+function scheduleOffsetMinutes(options, shipsTimeOffsetMinutes) {
+  const source = timeSourceOf(options);
+  if (source === 'utc-offset') {
+    return options.utcOffsetMinutes || 0;
+  }
+  if (source === 'ships-time' && Number.isFinite(shipsTimeOffsetMinutes)) {
+    return shipsTimeOffsetMinutes;
+  }
+  return undefined;
+}
+
+function wrapMinutes(minutes) {
+  return ((minutes % 1440) + 1440) % 1440;
+}
+
+function effectiveMinutesSinceMidnight(date, options, shipsTimeOffsetMinutes) {
+  const offset = scheduleOffsetMinutes(options, shipsTimeOffsetMinutes);
+  if (offset === undefined) {
+    return minutesSinceMidnight(date);
+  }
+  return wrapMinutes(minutesSinceMidnightUTC(date) + offset);
+}
+
+// Ship-local minutes used for quiet hours and night volume. Ship's time is
+// the vessel's real local time, so those ranges follow it; the manual UTC
+// offset is not, so with "utc-offset" they stay on the server's local clock
+// as before.
+function shipLocalMinutesSinceMidnight(date, options, shipsTimeOffsetMinutes) {
+  if (timeSourceOf(options) === 'ships-time' && Number.isFinite(shipsTimeOffsetMinutes)) {
+    return wrapMinutes(minutesSinceMidnightUTC(date) + shipsTimeOffsetMinutes);
+  }
+  return minutesSinceMidnight(date);
+}
+
+// Only the manual UTC offset forces "simple-cycle": ship's time is a real
+// local clock, so the British Navy dog-watch reset still lines up with it.
 function effectiveWatchScheme(options) {
-  return options.utcOffsetEnabled ? 'simple-cycle' : options.watchScheme;
+  return timeSourceOf(options) === 'utc-offset' ? 'simple-cycle' : options.watchScheme;
 }
 
 // ---- Bell schedule reference table (public/ webapp) ----------------------
@@ -136,9 +201,10 @@ function formatHHMM(minutesSinceMidnightValue) {
 // cover muteWhenAnchoredOrMoored at all -- that depends on live
 // navigation.state, not a fixed time, so there's nothing a static table
 // can show for it.
-function buildBellScheduleTable(options) {
+function buildBellScheduleTable(options, shipsTimeOffsetMinutes) {
   const scheme = effectiveWatchScheme(options);
-  const usesUtc = !!options.utcOffsetEnabled;
+  const source = timeSourceOf(options);
+  const usesUtc = source === 'utc-offset';
   const offset = options.utcOffsetMinutes || 0;
   const rows = [];
 
@@ -158,7 +224,18 @@ function buildBellScheduleTable(options) {
     });
   }
 
-  return { rows, usesUtc, watchScheme: scheme };
+  // With ship's time the rows are ship-local clock marks, which the
+  // webapp's own clock may not share; shipsTimeOffsetMinutes lets it
+  // highlight the current row in ship's time. null until an offset has
+  // been received.
+  const shipsTimeActive = source === 'ships-time' && Number.isFinite(shipsTimeOffsetMinutes);
+  return {
+    rows,
+    usesUtc,
+    watchScheme: scheme,
+    timeSource: source,
+    shipsTimeOffsetMinutes: shipsTimeActive ? shipsTimeOffsetMinutes : null
+  };
 }
 
 // ---- Quiet-hours calculation --------------------------------------------
@@ -207,11 +284,12 @@ function isWithinQuietHours(currentMinutes, startStr, endStr) {
 // to, so server-speaker playback always plays at full volume regardless of
 // this setting.
 
-function nightVolumeFactorForMoment(date, options) {
+function nightVolumeFactorForMoment(date, options, shipsTimeOffsetMinutes) {
   if (!options.nightVolumeEnabled) {
     return 1;
   }
-  if (!isWithinQuietHours(minutesSinceMidnight(date), options.nightVolumeStart, options.nightVolumeEnd)) {
+  const now = shipLocalMinutesSinceMidnight(date, options, shipsTimeOffsetMinutes);
+  if (!isWithinQuietHours(now, options.nightVolumeStart, options.nightVolumeEnd)) {
     return 1;
   }
   const level = typeof options.nightVolumeLevel === 'number' ? options.nightVolumeLevel : 100;
@@ -232,8 +310,20 @@ function nightVolumeFactorForMoment(date, options) {
 // midnight, just ahead of the regular 00:00:00 strike.
 const NEW_YEAR_EARLY_TRIGGER_SECONDS = 13;
 
-function nextNewYearEveTriggerTime(now) {
+// offsetMinutes (optional): when set, "31 Dec 23:59:47" is read on the clock
+// UTC+offsetMinutes (ship's time or the manual UTC offset) instead of the
+// server's local clock.
+function nextNewYearEveTriggerTime(now, offsetMinutes) {
   const seconds = 60 - NEW_YEAR_EARLY_TRIGGER_SECONDS; // 47
+  if (Number.isFinite(offsetMinutes)) {
+    const offsetMs = offsetMinutes * 60 * 1000;
+    const year = new Date(now.getTime() + offsetMs).getUTCFullYear();
+    let candidate = new Date(Date.UTC(year, 11, 31, 23, 59, seconds, 0) - offsetMs);
+    if (candidate.getTime() <= now.getTime()) {
+      candidate = new Date(Date.UTC(year + 1, 11, 31, 23, 59, seconds, 0) - offsetMs);
+    }
+    return candidate;
+  }
   let candidate = new Date(now.getFullYear(), 11, 31, 23, 59, seconds, 0);
   if (candidate.getTime() <= now.getTime()) {
     candidate = new Date(now.getFullYear() + 1, 11, 31, 23, 59, seconds, 0);
@@ -259,6 +349,11 @@ module.exports = function (app) {
   let newYearExtraStrikeTimer;
   let unsubscribeNavState;
   let currentNavState;
+  let unsubscribeShipsTime;
+  // Minutes east of UTC from environment.time.timezoneOffset (published by
+  // signalk-ships-time); undefined until a value arrives. Only read when
+  // the "ships-time" time source is selected.
+  let shipsTimeOffsetMinutes;
   let audioPlayer;
   let audioPlayerLoadFailed = false;
   let currentOptions = {};
@@ -284,6 +379,7 @@ module.exports = function (app) {
   // a test triggered by hand is deliberate.
   let allBellsMuted = false;
   const MUTED_PATH = 'plugins.signalkShipsBell.muted';
+  const SHIPS_TIME_OFFSET_PATH = 'environment.time.timezoneOffset';
 
   function setAllBellsMuted(muted) {
     allBellsMuted = !!muted;
@@ -719,7 +815,7 @@ module.exports = function (app) {
       return true;
     }
     if (options.quietHoursEnabled) {
-      const now = minutesSinceMidnight(new Date());
+      const now = shipLocalMinutesSinceMidnight(new Date(), options, shipsTimeOffsetMinutes);
       if (isWithinQuietHours(now, options.quietHoursStart, options.quietHoursEnd)) {
         return true;
       }
@@ -750,7 +846,7 @@ module.exports = function (app) {
       `webapp=${webapp}, serverSpeaker=${serverSpeaker}, mopidy=${mopidy}, alerts=${alerts}`
     );
 
-    const volumeFactor = nightVolumeFactorForMoment(new Date(), options);
+    const volumeFactor = nightVolumeFactorForMoment(new Date(), options, shipsTimeOffsetMinutes);
 
     if (webapp) {
       // The public/ webapp (served at /signalk-ships-bells/) subscribes to this
@@ -790,8 +886,9 @@ module.exports = function (app) {
   }
 
   function msUntilNextHalfHourBoundary(now, options) {
-    if (options && options.utcOffsetEnabled) {
-      const shifted = new Date(now.getTime() + (options.utcOffsetMinutes || 0) * 60 * 1000);
+    const offset = options ? scheduleOffsetMinutes(options, shipsTimeOffsetMinutes) : undefined;
+    if (offset !== undefined) {
+      const shifted = new Date(now.getTime() + offset * 60 * 1000);
       const msPastHalfHour =
         ((shifted.getUTCMinutes() % 30) * 60 + shifted.getUTCSeconds()) * 1000 + shifted.getUTCMilliseconds();
       return 30 * 60 * 1000 - msPastHalfHour;
@@ -823,14 +920,16 @@ module.exports = function (app) {
 
     strikeTimer = setTimeout(() => {
       const t = new Date();
-      strikeBell(bellCountForMinutes(effectiveMinutesSinceMidnight(t, options), effectiveWatchScheme(options)), options);
+      const minutes = effectiveMinutesSinceMidnight(t, options, shipsTimeOffsetMinutes);
+      strikeBell(bellCountForMinutes(minutes, effectiveWatchScheme(options)), options);
       scheduleNextStrike(options);
     }, delay);
   }
 
   function scheduleNextNewYearExtraStrike(options) {
     const now = new Date();
-    const delay = nextNewYearEveTriggerTime(now).getTime() - now.getTime();
+    const offset = scheduleOffsetMinutes(options, shipsTimeOffsetMinutes);
+    const delay = nextNewYearEveTriggerTime(now, offset).getTime() - now.getTime();
 
     scheduleLongTimeout(
       delay,
@@ -865,22 +964,27 @@ module.exports = function (app) {
         ],
         default: 'traditional'
       },
-      utcOffsetEnabled: {
-        type: 'boolean',
-        title: 'Enable manual UTC time offset',
+      timeSource: {
+        type: 'string',
+        title: 'Time source',
         description:
-          "Runs the bell schedule against UTC-plus-the-offset-below instead of this " +
-          "server's local clock, for crews who want the watch bells to sound at " +
-          "different times than local wall-clock time would give. When enabled, the " +
-          "Watch bell schedule above is forced to Standard - the British Navy dog-watch " +
-          "reset is tied to real second-dog-watch clock time, which an arbitrary offset " +
-          "would no longer line up with.",
-        default: false
+          "Which clock the bell schedule, quiet hours and reduced-volume hours run on. " +
+          "Local: this server's own clock and timezone. UTC with manual offset: UTC " +
+          "plus the offset below; forces the Watch bell schedule above to Standard, " +
+          "since the British Navy dog-watch reset is tied to real second-dog-watch " +
+          "clock time (quiet hours and reduced volume stay on this server's local " +
+          "clock). Ship's time: UTC plus the vessel's timezone offset " +
+          "(environment.time.timezoneOffset) published by the signalk-ships-time " +
+          "plugin, which must be installed; until an offset has been received, this " +
+          "server's local clock is used.",
+        enum: TIME_SOURCES,
+        enumNames: ['Local (this server\'s clock)', 'UTC with manual offset', "Ship's time (signalk-ships-time)"],
+        default: 'local'
       },
       utcOffsetMinutes: {
         type: 'integer',
         title: 'UTC time offset (minutes)',
-        description: 'Only used when "Enable manual UTC time offset" is on, above.',
+        description: 'Only used when Time source above is "UTC with manual offset".',
         minimum: 0,
         maximum: 240,
         default: 0
@@ -1126,7 +1230,7 @@ module.exports = function (app) {
     // every row's bell count by the configured offset, same as a live
     // strike would get).
     router.get('/bell-times', (req, res) => {
-      res.json(buildBellScheduleTable(currentOptions));
+      res.json(buildBellScheduleTable(currentOptions, shipsTimeOffsetMinutes));
     });
 
     router.put('/schedule', (req, res) => {
@@ -1198,9 +1302,12 @@ module.exports = function (app) {
     // it's for external tooling/automation that wants to set the offset without
     // going through the admin config UI. Supports partial updates: PUT only the
     // field(s) you're changing.
+    // utcOffsetEnabled here maps onto the timeSource dropdown: true selects
+    // "utc-offset", false leaves "local"/"ships-time" as they are and turns
+    // "utc-offset" back into "local".
     router.get('/offset', (req, res) => {
       res.json({
-        utcOffsetEnabled: !!currentOptions.utcOffsetEnabled,
+        utcOffsetEnabled: timeSourceOf(currentOptions) === 'utc-offset',
         utcOffsetMinutes: currentOptions.utcOffsetMinutes || 0
       });
     });
@@ -1228,7 +1335,15 @@ module.exports = function (app) {
       }
 
       if (hasEnabled) {
-        currentOptions.utcOffsetEnabled = body.utcOffsetEnabled;
+        const source = timeSourceOf(currentOptions);
+        if (body.utcOffsetEnabled) {
+          currentOptions.timeSource = 'utc-offset';
+        } else if (source === 'utc-offset') {
+          currentOptions.timeSource = 'local';
+        } else {
+          currentOptions.timeSource = source;
+        }
+        delete currentOptions.utcOffsetEnabled;
       }
       if (hasMinutes) {
         currentOptions.utcOffsetMinutes = body.utcOffsetMinutes;
@@ -1241,7 +1356,7 @@ module.exports = function (app) {
           return;
         }
         res.json({
-          utcOffsetEnabled: !!currentOptions.utcOffsetEnabled,
+          utcOffsetEnabled: timeSourceOf(currentOptions) === 'utc-offset',
           utcOffsetMinutes: currentOptions.utcOffsetMinutes || 0
         });
       });
@@ -1388,12 +1503,83 @@ module.exports = function (app) {
     return true;
   }
 
+  // Converts the old utcOffsetEnabled checkbox into the timeSource dropdown
+  // that replaced it. Same no-op-once pattern as the migrations above: a
+  // no-op once timeSource is present, or when there's no utcOffsetEnabled
+  // to convert (a fresh install).
+  function migrateTimeSource(options) {
+    if (options.timeSource !== undefined || !Object.prototype.hasOwnProperty.call(options, 'utcOffsetEnabled')) {
+      return false;
+    }
+    options.timeSource = options.utcOffsetEnabled ? 'utc-offset' : 'local';
+    delete options.utcOffsetEnabled;
+    return true;
+  }
+
+  // Reads environment.time.timezoneOffset from the server's current state.
+  // getSelfPath returns the leaf node ({ value, ... }) on signalk-server.
+  function readShipsTimeOffset() {
+    if (typeof app.getSelfPath !== 'function') {
+      return undefined;
+    }
+    const node = app.getSelfPath(SHIPS_TIME_OFFSET_PATH);
+    return hhmmToMinutes(node && typeof node === 'object' ? node.value : node);
+  }
+
+  function reportShipsTimeStatus() {
+    if (shipsTimeOffsetMinutes === undefined) {
+      const msg =
+        `Ship's time selected, but no ${SHIPS_TIME_OFFSET_PATH} received yet (is signalk-ships-time ` +
+        "installed and enabled?) - using this server's local clock until it arrives";
+      if (typeof app.setPluginError === 'function') {
+        app.setPluginError(msg);
+      } else {
+        app.error(`ships-bells: ${msg}`);
+      }
+      return;
+    }
+    const sign = shipsTimeOffsetMinutes < 0 ? '-' : '+';
+    const abs = Math.abs(shipsTimeOffsetMinutes);
+    const msg = `Using ship's time (UTC${sign}${formatHHMM(abs)})`;
+    if (typeof app.setPluginStatus === 'function') {
+      app.setPluginStatus(msg);
+    } else {
+      app.debug(`ships-bells: ${msg}`);
+    }
+  }
+
+  // Both timers are computed from the offset in effect when they were set,
+  // so a timezone change (e.g. signalk-ships-time's auto mode after crossing
+  // into a +05:45 zone) re-aligns them to the new half-hour marks and New
+  // Year's Eve.
+  function rescheduleTimers(options) {
+    if (strikeTimer) {
+      clearTimeout(strikeTimer);
+    }
+    if (newYearExtraStrikeTimer) {
+      clearTimeout(newYearExtraStrikeTimer);
+    }
+    scheduleNextStrike(options);
+    scheduleNextNewYearExtraStrike(options);
+  }
+
+  function setShipsTimeOffset(minutes, options) {
+    if (minutes === undefined || minutes === shipsTimeOffsetMinutes) {
+      return;
+    }
+    shipsTimeOffsetMinutes = minutes;
+    app.debug(`ships-bells: ship's time offset is now ${minutes} minutes`);
+    reportShipsTimeStatus();
+    rescheduleTimers(options);
+  }
+
   plugin.start = function (options) {
     app.debug('starting ships-bell plugin', options);
 
     const migratedMethod = migratePlaybackMethod(options);
     const migratedGrouping = migratePlaybackSettingsGrouping(options);
-    if (migratedMethod || migratedGrouping) {
+    const migratedTimeSource = migrateTimeSource(options);
+    if (migratedMethod || migratedGrouping || migratedTimeSource) {
       app.savePluginOptions(options, (err) => {
         if (err) {
           app.error(`ships-bells: failed to save migrated playback options: ${err.message || err}`);
@@ -1434,6 +1620,15 @@ module.exports = function (app) {
     // only once something first changes it.
     setAllBellsMuted(allBellsMuted);
 
+    shipsTimeOffsetMinutes = undefined;
+    if (timeSourceOf(options) === 'ships-time') {
+      shipsTimeOffsetMinutes = readShipsTimeOffset();
+      reportShipsTimeStatus();
+      unsubscribeShipsTime = app.streambundle
+        .getSelfStream(SHIPS_TIME_OFFSET_PATH)
+        .onValue((value) => setShipsTimeOffset(hhmmToMinutes(value), currentOptions));
+    }
+
     scheduleNextStrike(currentOptions);
     scheduleNextNewYearExtraStrike(currentOptions);
   };
@@ -1452,6 +1647,11 @@ module.exports = function (app) {
       unsubscribeNavState();
       unsubscribeNavState = undefined;
     }
+    if (unsubscribeShipsTime) {
+      unsubscribeShipsTime();
+      unsubscribeShipsTime = undefined;
+    }
+    shipsTimeOffsetMinutes = undefined;
   };
 
   return plugin;
@@ -1470,3 +1670,6 @@ module.exports.minutesSinceMidnightUTC = minutesSinceMidnightUTC;
 module.exports.effectiveMinutesSinceMidnight = effectiveMinutesSinceMidnight;
 module.exports.effectiveWatchScheme = effectiveWatchScheme;
 module.exports.buildBellScheduleTable = buildBellScheduleTable;
+module.exports.timeSourceOf = timeSourceOf;
+module.exports.hhmmToMinutes = hhmmToMinutes;
+module.exports.shipLocalMinutesSinceMidnight = shipLocalMinutesSinceMidnight;

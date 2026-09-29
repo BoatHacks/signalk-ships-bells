@@ -62,7 +62,7 @@ test('schema enum/enumNames stay in sync and defaults are valid members', () => 
   const plugin = createPlugin(app);
   const props = plugin.schema.properties;
 
-  for (const key of ['watchScheme']) {
+  for (const key of ['watchScheme', 'timeSource']) {
     assert.ok(Array.isArray(props[key].enum), `${key}.enum should be an array`);
     assert.ok(Array.isArray(props[key].enumNames), `${key}.enumNames should be an array`);
     assert.strictEqual(
@@ -1153,4 +1153,175 @@ test('mopidy zone muting reaches Snapcast at the configured snapcastHost, indepe
   assert.ok(fakeFetch.calls.every((c) => c.url.startsWith('http://mopidy.example.internal:')));
 
   plugin.stop();
+});
+
+// ---- Ship's time (signalk-ships-time) as the time source ------------------
+
+function makeShipsTimeApp(initialHhmm, overrides) {
+  const strikes = [];
+  const status = { error: [], status: [] };
+  const offsetListeners = [];
+  const app = makeMockApp(Object.assign({
+    handleMessage: (id, delta) => {
+      const v = delta.updates[0].values[0];
+      if (v.path !== 'notifications.plugins.signalkShipsBell.strike') return;
+      strikes.push({ strikes: v.value.data.strikes, at: new Date().toISOString() });
+    },
+    getSelfPath: (path) => (path === 'environment.time.timezoneOffset' && initialHhmm !== undefined
+      ? { value: initialHhmm }
+      : undefined),
+    setPluginError: (msg) => status.error.push(msg),
+    setPluginStatus: (msg) => status.status.push(msg),
+    streambundle: {
+      getSelfStream: (path) => ({
+        onValue: (cb) => {
+          if (path === 'environment.time.timezoneOffset') offsetListeners.push(cb);
+          return () => {};
+        }
+      })
+    }
+  }, overrides));
+  app._strikes = strikes;
+  app._status = status;
+  app._emitOffset = (hhmm) => offsetListeners.forEach((cb) => cb(hhmm));
+  return app;
+}
+
+test("ship's time: strikes follow environment.time.timezoneOffset, including a +05:45 zone and a later timezone change", (t) => {
+  const app = makeShipsTimeApp(545);
+  // 10:00Z = 15:45 ship's time (+05:45)
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: new Date('2026-06-15T10:00:00.000Z').getTime() });
+  const plugin = createPlugin(app);
+  plugin.start({ enabled: true, watchScheme: 'traditional', timeSource: 'ships-time', muteWhenAnchoredOrMoored: false });
+  assert.deepStrictEqual(app._status.status, ["Using ship's time (UTC+05:45)"]);
+
+  t.mock.timers.tick(15 * 60 * 1000); // -> 10:15Z = 16:00 ship's time, 8 bells
+  assert.deepStrictEqual(app._strikes, [{ strikes: 8, at: '2026-06-15T10:15:00.000Z' }]);
+
+  // signalk-ships-time switches to +02:00: 10:15Z = 12:15 ship's time, so
+  // the next strike is 12:30 ship's time = 10:30Z (1 bell), not 10:45Z.
+  app._emitOffset(200);
+  t.mock.timers.tick(15 * 60 * 1000);
+  assert.deepStrictEqual(app._strikes.map((s) => [s.strikes, s.at]), [
+    [8, '2026-06-15T10:15:00.000Z'],
+    [1, '2026-06-15T10:30:00.000Z']
+  ]);
+
+  plugin.stop();
+});
+
+test("ship's time keeps the British Navy dog-watch reset (unlike the manual UTC offset)", (t) => {
+  const app = makeShipsTimeApp(-300); // -05:00
+  // 23:00Z = 18:00 ship's time; next strike 18:30 ship's time = 1 bell (traditional)
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: new Date('2026-06-15T23:00:00.000Z').getTime() });
+  const plugin = createPlugin(app);
+  plugin.start({ enabled: true, watchScheme: 'traditional', timeSource: 'ships-time', muteWhenAnchoredOrMoored: false });
+  t.mock.timers.tick(30 * 60 * 1000);
+  assert.deepStrictEqual(app._strikes.map((s) => s.strikes), [1]);
+  plugin.stop();
+});
+
+test("ship's time selected without signalk-ships-time data: reports it and falls back to the server's local clock", (t) => {
+  const app = makeShipsTimeApp(undefined);
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: new Date('2026-06-15T10:00:00.000Z').getTime() });
+  const plugin = createPlugin(app);
+  plugin.start({ enabled: true, watchScheme: 'traditional', timeSource: 'ships-time', muteWhenAnchoredOrMoored: false });
+  assert.strictEqual(app._status.error.length, 1);
+  assert.match(app._status.error[0], /signalk-ships-time/);
+
+  const expected = bellCountAt(new Date('2026-06-15T10:30:00.000Z'));
+  t.mock.timers.tick(30 * 60 * 1000);
+  assert.deepStrictEqual(app._strikes.map((s) => s.strikes), [expected]);
+
+  // Once an offset arrives it is used from then on.
+  app._emitOffset(300); // 10:30Z = 13:30 ship's time; next 14:00 = 11:00Z, 4 bells
+  assert.deepStrictEqual(app._status.status, ["Using ship's time (UTC+03:00)"]);
+  t.mock.timers.tick(30 * 60 * 1000);
+  assert.deepStrictEqual(app._strikes.map((s) => s.strikes), [expected, 4]);
+  plugin.stop();
+});
+
+function bellCountAt(date) {
+  return createPlugin.bellCountForMinutes(createPlugin.minutesSinceMidnight(date), 'traditional');
+}
+
+test("ship's time is ignored unless selected: the default local source never reads the offset", (t) => {
+  let read = false;
+  const app = makeShipsTimeApp(545, { getSelfPath: () => { read = true; return { value: 545 }; } });
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: new Date('2026-06-15T10:00:00.000Z').getTime() });
+  const plugin = createPlugin(app);
+  plugin.start({ enabled: true, watchScheme: 'traditional', muteWhenAnchoredOrMoored: false });
+  assert.strictEqual(read, false);
+  t.mock.timers.tick(30 * 60 * 1000);
+  assert.deepStrictEqual(app._strikes.map((s) => s.strikes), [bellCountAt(new Date('2026-06-15T10:30:00.000Z'))]);
+  plugin.stop();
+});
+
+test("quiet hours follow ship's time when it is the time source", (t) => {
+  const app = makeShipsTimeApp(900); // +09:00
+  // 13:00Z = 22:00 ship's time: inside 22:00-06:00 quiet hours in ship's time
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: new Date('2026-06-15T13:00:00.000Z').getTime() });
+  const plugin = createPlugin(app);
+  plugin.start({
+    enabled: true,
+    watchScheme: 'traditional',
+    timeSource: 'ships-time',
+    muteWhenAnchoredOrMoored: false,
+    quietHoursEnabled: true,
+    quietHoursStart: '22:00',
+    quietHoursEnd: '06:00'
+  });
+  t.mock.timers.tick(30 * 60 * 1000);
+  assert.deepStrictEqual(app._strikes, []);
+  plugin.stop();
+});
+
+test("GET /bell-times reports the ship's time offset so the webapp can highlight the current row", () => {
+  const app = makeShipsTimeApp(-930);
+  const plugin = createPlugin(app);
+  const router = makeFakeRouter();
+  plugin.registerWithRouter(router);
+  plugin.start({ enabled: true, watchScheme: 'traditional', timeSource: 'ships-time' });
+  const res = makeFakeRes();
+  router.routes.get['/bell-times']({}, res);
+  assert.strictEqual(res.body.timeSource, 'ships-time');
+  assert.strictEqual(res.body.shipsTimeOffsetMinutes, -570);
+  assert.strictEqual(res.body.usesUtc, false);
+  assert.strictEqual(res.body.watchScheme, 'traditional');
+  plugin.stop();
+});
+
+test('the old utcOffsetEnabled checkbox migrates to the timeSource dropdown, and is persisted', () => {
+  for (const [enabled, expected] of [[true, 'utc-offset'], [false, 'local']]) {
+    let saved;
+    const app = makeMockApp({ savePluginOptions: (options, cb) => { saved = options; cb(null); } });
+    const plugin = createPlugin(app);
+    plugin.start({ enabled: false, utcOffsetEnabled: enabled, utcOffsetMinutes: 60, playbackOutputs: {} });
+    assert.strictEqual(saved.timeSource, expected);
+    assert.ok(!Object.prototype.hasOwnProperty.call(saved, 'utcOffsetEnabled'));
+    assert.strictEqual(saved.utcOffsetMinutes, 60);
+  }
+});
+
+test("PUT /offset with utcOffsetEnabled false leaves ship's time selected; true switches to the manual offset", () => {
+  const app = makeMockApp();
+  const plugin = createPlugin(app);
+  const router = makeFakeRouter();
+  plugin.registerWithRouter(router);
+  const options = { enabled: false, timeSource: 'ships-time' };
+  plugin.start(options);
+
+  const off = makeFakeRes();
+  router.routes.put['/offset']({ body: { utcOffsetEnabled: false } }, off);
+  assert.deepStrictEqual(off.body, { utcOffsetEnabled: false, utcOffsetMinutes: 0 });
+  assert.strictEqual(options.timeSource, 'ships-time');
+
+  const on = makeFakeRes();
+  router.routes.put['/offset']({ body: { utcOffsetEnabled: true } }, on);
+  assert.deepStrictEqual(on.body, { utcOffsetEnabled: true, utcOffsetMinutes: 0 });
+  assert.strictEqual(options.timeSource, 'utc-offset');
+
+  const back = makeFakeRes();
+  router.routes.put['/offset']({ body: { utcOffsetEnabled: false } }, back);
+  assert.strictEqual(options.timeSource, 'local');
 });
